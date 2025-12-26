@@ -1,0 +1,36 @@
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+   .full-height-layout {
+     display: flex;
+     flex-direction: column;
+     height: 100vh;
+   }
+   
+   .main-content-row {
+     flex-grow: 1;
+     overflow: hidden; /* Prevent entire row from scrolling */
+   }
+   
+   .scrollable-main {
+     height: 100%;
+     overflow-y: auto; /* Allow only main content to scroll */
+   }
+   
+   .sticky-sidebar {
+     position: sticky;
+     top: 56px; /* Height of the navbar */
+     height: calc(100vh - 56px); /* Full height minus navbar */
+     overflow-y: auto; /* Allow sidebar to scroll if its content is too long */
+   }

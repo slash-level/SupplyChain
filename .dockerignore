@@ -1,0 +1,20 @@
+# Git関連
+.git
+.gitignore
+
+# Docker関連
+Dockerfile
+.dockerignore
+
+# 依存関係（コンテナ内でインストールするため不要）
+node_modules
+client/node_modules
+server/node_modules
+
+# ビルド成果物（コンテナ内で生成するため不要）
+client/build
+
+# 環境変数ファイル（コンテナ実行時に外部から渡すため含めない）
+client/.env
+server/.env
+server/.env.example

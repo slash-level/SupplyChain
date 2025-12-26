@@ -1,0 +1,27 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        - REACT_APP_FIREBASE_API_KEY=${REACT_APP_FIREBASE_API_KEY}
+        - REACT_APP_FIREBASE_AUTH_DOMAIN=${REACT_APP_FIREBASE_AUTH_DOMAIN}
+        - REACT_APP_FIREBASE_PROJECT_ID=${REACT_APP_FIREBASE_PROJECT_ID}
+        - REACT_APP_FIREBASE_STORAGE_BUCKET=${REACT_APP_FIREBASE_STORAGE_BUCKET}
+        - REACT_APP_FIREBASE_MESSAGING_SENDER_ID=${REACT_APP_FIREBASE_MESSAGING_SENDER_ID}
+        - REACT_APP_FIREBASE_APP_ID=${REACT_APP_FIREBASE_APP_ID}
+        - REACT_APP_MEASUREMENT_ID=${REACT_APP_MEASUREMENT_ID}
+    image: security-selfcheck-app
+    ports:
+      - "${PORT}:${PORT}"
+    env_file:
+      - .env
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./supplychaintest-d81af-firebase-adminsdk-fbsvc-d6efe09d13.json:/app/gcloud-credentials.json:ro
+    environment:
+      - GEMINI_MODEL_NAME=${GEMINI_MODEL_NAME}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcloud-credentials.json
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    dns:
+      - 8.8.8.8

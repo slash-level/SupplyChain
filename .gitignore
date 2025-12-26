@@ -1,0 +1,19 @@
+# Dependencies
+/node_modules
+/client/node_modules
+/server/node_modules
+
+# Environment variables
+.env
+client/.env
+server/.env
+
+# Build artifacts
+/client/build
+
+# macOS system files
+.DS_Store
+
+# Service Account Credentials
+supplychain*.json
+\n# Private Development Notes\nDEV_NOTES.md
