@@ -96,7 +96,7 @@ const User = sequelize.define('User', {
     },
     email: {
         type: DataTypes.STRING,
-        allowNull: false,
+        allowNull: true, // ゲストユーザー(emailなし)を許可するためtrueに変更
         unique: true
     },
     companyName: {
@@ -423,15 +423,29 @@ app.get('/api/criteria', async (req, res) => {
 app.post('/api/users', async (req, res) => {
     try {
         const { firebaseUid, email, companyName } = req.body;
-        if (!firebaseUid || !email) {
-            return res.status(400).json({ error: 'Missing required fields: firebaseUid, email' });
+        // 必須チェック: emailはゲストの場合ない可能性があるのでチェックしない
+        if (!firebaseUid) {
+            return res.status(400).json({ error: 'Missing required fields: firebaseUid' });
         }
+
+        // ゲストログイン時、空文字("")が送られてくる場合があるため、nullに変換する
+        // これにより、Unique制約(重複チェック)でエラーになるのを防ぐ
+        const emailToSave = email || null;
+
         const [user, created] = await User.findOrCreate({
             where: { firebaseUid },
-            defaults: { email, companyName }
+            defaults: { email: emailToSave, companyName }
         });
-        if (!created && companyName && !user.companyName) {
-            user.companyName = companyName;
+
+        // 既存ユーザーの更新処理
+        if (!created) {
+            // メールアドレスが新たに設定された場合(ゲスト->登録など)のみ更新
+            if (emailToSave && user.email !== emailToSave) {
+                user.email = emailToSave;
+            }
+            if (companyName && !user.companyName) {
+                user.companyName = companyName;
+            }
             await user.save();
         }
         res.status(created ? 201 : 200).json(user);
