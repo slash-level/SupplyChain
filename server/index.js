@@ -41,7 +41,8 @@ async function loadCsvData() {
 const app = express();
 const port = process.env.PORT || 3001; // 環境変数からポートを取得、なければ3001
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
@@ -71,6 +72,7 @@ const Criterion = sequelize.define('Criterion', {
         allowNull: false,
         primaryKey: true
     },
+    requirement_name: { type: DataTypes.STRING, allowNull: true },
     requirement_text: { type: DataTypes.TEXT, allowNull: false },
     star_level: { type: DataTypes.INTEGER, allowNull: false },
     criterion_id: {
@@ -410,7 +412,9 @@ app.get('/api/gemini/models', async (req, res) => {
 
 app.get('/api/criteria', async (req, res) => {
   try {
-    const criteria = await Criterion.findAll();
+    const criteria = await Criterion.findAll({
+        order: [['criterion_id', 'ASC']]
+    });
     res.json(criteria);
   } catch (error) {
     console.error('Error fetching criteria:', error);
@@ -537,6 +541,21 @@ app.get('/api/evaluationsets/:firebaseUid', async (req, res) => {
     }
 });
 
+// Get a single evaluation set by ID
+app.get('/api/evaluationset/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const evaluationSet = await EvaluationSet.findByPk(id);
+        if (!evaluationSet) {
+            return res.status(404).json({ error: 'EvaluationSet not found' });
+        }
+        res.json(evaluationSet);
+    } catch (error) {
+        console.error('Error fetching evaluation set:', error);
+        res.status(500).json({ error: 'Failed to fetch evaluation set' });
+    }
+});
+
 // Create a new evaluation set
 app.post('/api/evaluationsets', async (req, res) => {
     try {
@@ -544,6 +563,19 @@ app.post('/api/evaluationsets', async (req, res) => {
         if (!firebaseUid || !name) {
             return res.status(400).json({ error: 'Missing required fields: firebaseUid, name' });
         }
+
+        // Check for duplicate name for the same user
+        const existingSet = await EvaluationSet.findOne({
+            where: {
+                firebaseUid: firebaseUid,
+                name: name
+            }
+        });
+
+        if (existingSet) {
+            return res.status(409).json({ error: '同名の評価セットは既に存在します。別の名前を指定してください。' });
+        }
+
         const evaluationSet = await EvaluationSet.create({ firebaseUid, name, description });
         res.status(201).json(evaluationSet);
     } catch (error) {
@@ -637,6 +669,7 @@ app.get('/api/answers/:evaluationSetId', async (req, res) => {
         
         const answers = await Answer.findAll({
             where: { evaluationSetId },
+            order: [['requirement_id', 'ASC'], ['criterion_id', 'ASC']],
             raw: true
         });
 
@@ -885,37 +918,91 @@ function getStatusColor(status) {
 }
 
 // Function to generate the report HTML
-function generatePdfHtml(requirements) {
+function generatePdfHtml(requirements, evaluationSetName) {
     let body = '';
 
-    for (const category1 in requirements) {
-        body += `<div class="category-group"><h1>${escapeHtml(category1)}</h1>`;
-        for (const category2 in requirements[category1]) {
-            body += `<div class="subcategory-group"><h2>${escapeHtml(category2)}</h2>`;
-            for (const req of requirements[category1][category2]) {
+    // Helper to safely get Category 1 No
+    const getCat1No = (cat1Key) => {
+        const cat1Data = requirements[cat1Key];
+        if (!cat1Data) return 999;
+        const cat2Keys = Object.keys(cat1Data);
+        if (cat2Keys.length === 0) return 999;
+        const reqs = cat1Data[cat2Keys[0]];
+        if (!reqs || reqs.length === 0) return 999;
+        return parseInt(reqs[0].category1_no || '999', 10);
+    };
+
+    // Sort category1 keys
+    const sortedCat1Keys = Object.keys(requirements).sort((a, b) => {
+        return getCat1No(a) - getCat1No(b);
+    });
+
+    for (const category1 of sortedCat1Keys) {
+        const subCategories = requirements[category1];
+        // Get category1_no safely
+        const cat1No = getCat1No(category1);
+        const displayCat1No = cat1No === 999 ? '' : `${cat1No}. `;
+        
+        body += `<div class="category-group"><h1>${escapeHtml(displayCat1No)}${escapeHtml(category1)}</h1>`;
+        
+        // Helper to safely get Category 2 No
+        const getCat2No = (cat2Key) => {
+            const reqs = subCategories[cat2Key];
+            if (!reqs || reqs.length === 0) return '999';
+            return reqs[0].category2_no || '999';
+        };
+
+        // Sort category2 keys
+        const sortedCat2Keys = Object.keys(subCategories).sort((a, b) => {
+            return getCat2No(a).localeCompare(getCat2No(b), undefined, { numeric: true, sensitivity: 'base' });
+        });
+
+        for (const category2 of sortedCat2Keys) {
+            const reqs = subCategories[category2];
+            if (!reqs || reqs.length === 0) continue; // Skip if empty
+
+            const cat2No = getCat2No(category2);
+            const displayCat2No = cat2No === '999' ? '' : `${cat2No}. `;
+
+            body += `<div class="subcategory-group"><h2>${escapeHtml(displayCat2No)}${escapeHtml(category2)}</h2>`;
+            for (const req of reqs) {
+                const reqName = req.name ? `【${escapeHtml(req.name)}】<br/>` : '';
                 body += `
                     <div class="requirement">
-                        <h3>${escapeHtml(req.id)}. ${escapeHtml(req.text)}</h3>
+                        <h3>${escapeHtml(req.id)}. ${reqName}${escapeHtml(req.text)}</h3>
                         <table class="criteria-table">
+                            <colgroup>
+                                <col style="width: 8%;">
+                                <col style="width: 10%;">
+                                <col style="width: 44%;">
+                                <col style="width: 8%;">
+                                <col style="width: 30%;">
+                            </colgroup>
                             <thead>
                                 <tr>
-                                    <th>評価基準ID</th>
+                                    <th>★3/★4</th>
+                                    <th>評価基準No.</th>
                                     <th>評価基準</th>
-                                    <th>ステータス</th>
+                                    <th>評価</th>
                                     <th>備考</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 ${req.criteria.map(criterion => `
                                     <tr>
-                                        <td>${escapeHtml(criterion.criterion_id)}</td>
+                                        <td style="text-align: center;">
+                                            ★${criterion.star_level}
+                                        </td>
+                                        <td style="text-align: center;">
+                                            ${escapeHtml(criterion.criterion_id)}
+                                        </td>
                                         <td>${escapeHtml(criterion.criterion_text)}</td>
                                         <td>
                                             <span class="status-badge" style="background-color: ${getStatusColor(criterion.status)}; color: ${criterion.status === '未評価' ? '#000' : '#fff'};">
                                                 ${escapeHtml(criterion.status)}
                                             </span>
                                         </td>
-                                        <td class="notes">${escapeHtml(criterion.notes).replace(/\n/g, '<br>')}</td>
+                                        <td class="notes">${escapeHtml(criterion.notes).replace(/\n/g, '<br>') }</td>
                                     </tr>
                                 `).join('')}
                             </tbody>
@@ -935,37 +1022,97 @@ function generatePdfHtml(requirements) {
             <meta charset="UTF-8">
             <title>セキュリティ評価レポート</title>
             <style>
-                body { 
-                    font-family: 'Helvetica', 'Arial', sans-serif;
+                body {
+                    font-family: 'Noto Sans CJK JP', 'Helvetica', 'Arial', sans-serif;
                     -webkit-print-color-adjust: exact;
                     color-adjust: exact;
+                    font-size: 12px;
                 }
-                h1 { font-size: 20px; text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; }
-                h2 { font-size: 16px; background-color: #e9ecef; padding: 8px; border-radius: 4px; }
-                h3 { font-size: 14px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
-                .report-date { text-align: right; color: #555; margin-bottom: 20px; }
-                .category-group, .subcategory-group, .requirement { 
-                    margin-bottom: 24px; 
-                    page-break-inside: avoid;
+                h1 {
+                    font-size: 18px;
+                    text-align: left;
+                    border-bottom: 2px solid #333;
+                    padding-bottom: 5px;
+                    margin-top: 20px;
+                    margin-bottom: 10px;
+                    page-break-after: avoid;
                 }
-                .criteria-table { width: 100%; border-collapse: collapse; font-size: 10px; }
-                .criteria-table th, .criteria-table td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+                h2 {
+                    font-size: 15px;
+                    background-color: #f0f0f0;
+                    padding: 5px 10px;
+                    border-radius: 4px;
+                    margin-top: 15px;
+                    margin-bottom: 8px;
+                    page-break-after: avoid;
+                }
+                h3 {
+                    font-size: 13px;
+                    margin-top: 10px;
+                    margin-bottom: 5px;
+                    border-left: 4px solid #007bff;
+                    padding-left: 8px;
+                    page-break-after: avoid;
+                }
+                .report-date { text-align: right; color: #555; margin-bottom: 20px; font-size: 10px; }
+                .report-title-section { text-align: center; margin-bottom: 30px; }
+                .report-title-section h1 { 
+                    border: none; 
+                    font-size: 24px; 
+                    text-align: center; 
+                    margin-bottom: 10px; 
+                }
+                .evaluation-set-name {
+                    font-size: 16px;
+                    font-weight: bold;
+                    color: #007bff;
+                    margin-bottom: 10px;
+                }
+
+                .category-group { margin-bottom: 20px; }
+                .subcategory-group { margin-bottom: 15px; }
+                .requirement { page-break-inside: avoid; margin-bottom: 10px; }
+
+                .criteria-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 10px;
+                    table-layout: fixed; /* 固定幅レイアウト */
+                }
+                .criteria-table th, .criteria-table td {
+                    border: 1px solid #ddd;
+                    padding: 5px;
+                    text-align: left;
+                    vertical-align: top;
+                    word-wrap: break-word; /* 長い単語の折り返し */
+                }
                 .criteria-table th { background-color: #f9f9f9; }
-                .status-badge { padding: 3px 6px; border-radius: 4px; font-size: 9px; }
-                .notes { white-space: pre-wrap; word-wrap: break-word; }
+                .status-badge {
+                    display: inline-block;
+                    padding: 2px 5px;
+                    border-radius: 3px;
+                    font-size: 9px;
+                    white-space: nowrap;
+                }
+                .notes {
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                }
             </style>
         </head>
         <body>
-            <h1>セキュリティ評価レポート</h1>
-            <p class="report-date">作成日: ${new Date().toLocaleDateString('ja-JP')}</p>
+            <div class="report-title-section">
+                <h1>セキュリティ評価レポート</h1>
+                <div class="evaluation-set-name">評価セット: ${escapeHtml(evaluationSetName)}</div>
+                <p class="report-date">作成日: ${new Date().toLocaleDateString('ja-JP')}</p>
+            </div>
             ${body}
         </body>
         </html>
     `;
 }
-
 app.post('/api/report/pdf', async (req, res) => {
-    const { requirements } = req.body;
+    const { requirements, evaluationSetName } = req.body;
     if (!requirements) {
         return res.status(400).send({ error: 'Invalid data format: requirements data is missing.' });
     }
@@ -975,11 +1122,16 @@ app.post('/api/report/pdf', async (req, res) => {
     const tempFilePath = path.join(__dirname, tempFileName);
 
     try {
-        const htmlContent = generatePdfHtml(requirements);
+        const htmlContent = generatePdfHtml(requirements, evaluationSetName || '');
         
         browser = await puppeteer.launch({
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage' // Docker環境でのメモリクラッシュ防止
+            ]
         });
         const page = await browser.newPage();
         

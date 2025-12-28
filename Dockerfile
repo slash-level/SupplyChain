@@ -38,6 +38,23 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Install Chromium and dependencies for Puppeteer
+RUN apk add --no-cache \
+      chromium \
+      nss \
+      freetype \
+      freetype-dev \
+      harfbuzz \
+      ca-certificates \
+      ttf-freefont \
+      nodejs \
+      yarn \
+      font-noto-cjk
+
+# Set Puppeteer environment variables
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
 # serverのpackage.jsonをコピーしてnpm install
 COPY server/package.json server/package-lock.json ./server/
 # --omit=dev は本番環境で不要な開発用パッケージをインストールしないためのオプション

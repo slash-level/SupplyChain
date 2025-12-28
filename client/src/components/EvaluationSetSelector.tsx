@@ -6,7 +6,7 @@ import ListGroup from 'react-bootstrap/ListGroup';
 import Card from 'react-bootstrap/Card';
 import Spinner from 'react-bootstrap/Spinner';
 import Alert from 'react-bootstrap/Alert';
-import Modal from 'react-bootstrap/Modal'; // For confirmation dialog
+import Modal from 'react-bootstrap/Modal';
 
 interface EvaluationSet {
   evaluationSetId: string;
@@ -30,6 +30,13 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+
+  // Editing state
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingSetId, setEditingSetId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingSetId, setDeletingSetId] = useState<string | null>(null);
@@ -79,16 +86,55 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
       });
 
       if (!response.ok) {
-        throw new Error('新しい評価セットの作成に失敗しました。');
+        const data = await response.json();
+        throw new Error(data.error || '新しい評価セットの作成に失敗しました。');
       }
 
       const newSet = await response.json();
-      onSelect(newSet.evaluationSetId); // Immediately select the new set
+      onSelect(newSet.evaluationSetId);
 
     } catch (err: any) {
       setError(err.message);
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const handleEditClick = (set: EvaluationSet) => {
+    setEditingSetId(set.evaluationSetId);
+    setEditName(set.name);
+    setEditDescription(set.description || '');
+    setShowEditModal(true);
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSetId || !editName.trim()) return;
+
+    setIsUpdating(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/evaluationsets/${editingSetId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editName,
+          description: editDescription,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('評価セットの更新に失敗しました。');
+      }
+
+      await fetchEvaluationSets();
+      setShowEditModal(false);
+      setEditingSetId(null);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -107,20 +153,19 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
       const response = await fetch(`/api/evaluationsets/${deletingSetId}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ firebaseUid: user.uid }), // Pass firebaseUid for authorization
+        body: JSON.stringify({ firebaseUid: user.uid }),
       });
 
       if (!response.ok) {
         throw new Error('評価セットの削除に失敗しました。');
       }
 
-      // If the currently selected evaluation set was deleted, clear the selection
       if (deletingSetId === localStorage.getItem('selectedEvaluationSetId')) {
         localStorage.removeItem('selectedEvaluationSetId');
-        onSelect(''); // Clear selection in App.tsx
+        onSelect('');
       }
       
-      fetchEvaluationSets(); // Refresh the list
+      fetchEvaluationSets();
       setShowDeleteConfirm(false);
       setDeletingSetId(null);
 
@@ -159,23 +204,34 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
             {evaluationSets.map(set => (
               <ListGroup.Item 
                 key={set.evaluationSetId} 
-                className="d-flex justify-content-between align-items-center" // Changed to align-items-center
+                className="d-flex justify-content-between align-items-center"
               >
-                <div className="me-auto">
-                  <a href="#" onClick={(e) => { e.preventDefault(); onSelect(set.evaluationSetId); }} className="fw-bold text-decoration-none">
+                <div className="me-auto" style={{ maxWidth: '60%' }}>
+                  <a href="#" onClick={(e) => { e.preventDefault(); onSelect(set.evaluationSetId); }} className="fw-bold text-decoration-none text-truncate d-block">
                     {set.name}
                   </a>
-                  {set.description && <small className="text-muted d-block">{set.description}</small>}
+                  {set.description && <small className="text-muted d-block text-truncate">{set.description}</small>}
                   <small className="text-muted">最終更新: {new Date(set.updatedAt).toLocaleDateString()}</small>
                 </div>
-                <Button 
-                  variant="danger" 
-                  size="sm" 
-                  onClick={() => handleDeleteClick(set.evaluationSetId)}
-                  disabled={isDeleting}
-                >
-                  削除
-                </Button>
+                <div className="d-flex align-items-center">
+                    <Button 
+                    variant="outline-secondary" 
+                    size="sm" 
+                    className="me-2"
+                    onClick={() => handleEditClick(set)}
+                    disabled={isDeleting}
+                    >
+                    編集
+                    </Button>
+                    <Button 
+                    variant="danger" 
+                    size="sm" 
+                    onClick={() => handleDeleteClick(set.evaluationSetId)}
+                    disabled={isDeleting}
+                    >
+                    削除
+                    </Button>
+                </div>
               </ListGroup.Item>
             ))}
           </ListGroup>
@@ -235,7 +291,47 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
         </Card.Body>
       </Card>
 
-      {/* Delete Confirmation Modal */}
+      <Modal show={showEditModal} onHide={() => setShowEditModal(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>評価セットの編集</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form onSubmit={handleUpdate}>
+            <Form.Group className="mb-3" controlId="editSetName">
+              <Form.Label>評価名</Form.Label>
+              <Form.Control
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                required
+              />
+            </Form.Group>
+            <Form.Group className="mb-3" controlId="editSetDescription">
+              <Form.Label>説明</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={2}
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+              />
+            </Form.Group>
+            <div className="d-flex justify-content-end">
+                <Button variant="secondary" onClick={() => setShowEditModal(false)} className="me-2" disabled={isUpdating}>
+                    キャンセル
+                </Button>
+                <Button variant="primary" type="submit" disabled={isUpdating}>
+                    {isUpdating ? (
+                    <>
+                        <Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" />
+                        <span> 更新中...</span>
+                    </>
+                    ) : '更新'}
+                </Button>
+            </div>
+          </Form>
+        </Modal.Body>
+      </Modal>
+
       <Modal show={showDeleteConfirm} onHide={handleDeleteCancel} centered>
         <Modal.Header closeButton>
           <Modal.Title>評価セットの削除確認</Modal.Title>
