@@ -1121,35 +1121,71 @@ app.post('/api/report/pdf', async (req, res) => {
     const tempFileName = `report-${Date.now()}.pdf`;
     const tempFilePath = path.join(__dirname, tempFileName);
 
-        try {
-            const htmlContent = generatePdfHtml(requirements, evaluationSetName || '');
+            try {
+
+                const htmlContent = generatePdfHtml(requirements, evaluationSetName || '');
+
+                
+
+                browser = await puppeteer.launch({
+
+                    headless: true,
+
+                    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
+
+                    args: [
+
+                        '--no-sandbox',
+
+                        '--disable-setuid-sandbox',
+
+                        '--disable-dev-shm-usage', // Docker環境でのメモリクラッシュ防止
+
+                        '--disable-gpu',           // GPU無効化（サーバー負荷軽減）
+
+                        '--no-first-run',
+
+                        '--no-zygote',
+
+                        '--single-process',        // プロセス数を減らす
+
+                    ],
+
+                    protocolTimeout: 300000 // タイムアウトを300秒(5分)に延長
+
+                });
+
+                const page = await browser.newPage();
+
+                
+
+                await page.setContent(htmlContent, { 
+
+                    waitUntil: 'networkidle0',
+
+                    timeout: 300000 // コンテンツ読み込みタイムアウトを300秒に延長
+
+                });
+
             
-            browser = await puppeteer.launch({
-                headless: true,
-                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage' // Docker環境でのメモリクラッシュ防止
-                ],
-                protocolTimeout: 180000 // タイムアウトを180秒(3分)に延長
-            });
-            const page = await browser.newPage();
-            
-            await page.setContent(htmlContent, { 
-                waitUntil: 'networkidle0',
-                timeout: 180000 // コンテンツ読み込みタイムアウトを180秒に延長
-            });
+
+                await page.pdf({
+
+                    path: tempFilePath,
+
+                    format: 'Letter',
+
+                    printBackground: false,
+
+                    margin: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
+
+                    timeout: 300000 // PDF生成タイムアウトを300秒に延長
+
+                });
+
         
-            await page.pdf({
-                path: tempFilePath,
-                format: 'Letter',
-                printBackground: false,
-                margin: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
-                timeout: 180000 // PDF生成タイムアウトを180秒に延長
-            });
-    
-            res.sendFile(tempFilePath, { headers: { 'Content-Disposition': 'attachment; filename=security-report.pdf' } }, (err) => {            if (err) {
+
+                res.sendFile(tempFilePath, { headers: { 'Content-Disposition': 'attachment; filename=security-report.pdf' } }, (err) => {            if (err) {
                 console.error('Error sending file:', err);
                 if (!res.headersSent) {
                     res.status(500).send({ error: 'Failed to send PDF file.' });
