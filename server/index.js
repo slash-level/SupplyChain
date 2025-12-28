@@ -1131,17 +1131,22 @@ app.post('/api/report/pdf', async (req, res) => {
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage' // Docker環境でのメモリクラッシュ防止
-            ]
+            ],
+            protocolTimeout: 60000 // タイムアウトを60秒に延長
         });
         const page = await browser.newPage();
         
-        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+        await page.setContent(htmlContent, {
+            waitUntil: 'networkidle0',
+            timeout: 60000 // コンテンツ読み込みタイムアウトを60秒に延長
+        });
     
         await page.pdf({
             path: tempFilePath,
             format: 'Letter',
             printBackground: false,
-            margin: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' }
+            margin: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
+            timeout: 60000 // PDF生成タイムアウトを60秒に延長
         });
 
         res.sendFile(tempFilePath, { headers: { 'Content-Disposition': 'attachment; filename=security-report.pdf' } }, (err) => {
