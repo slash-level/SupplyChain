@@ -35,11 +35,6 @@ const Sidebar: React.FC<SidebarProps> = ({ groupedRequirements, onBackToSelectio
   return (
     <div className="pt-3 pb-5" style={{ height: 'calc(100vh - 60px)', overflowY: 'auto' }}>
       <Nav className="flex-column">
-        <Nav.Item className="mb-2">
-            <Nav.Link onClick={onBackToSelection} className="text-secondary fw-bold" style={{ cursor: 'pointer' }}>
-                &larr; 評価セット選択に戻る
-            </Nav.Link>
-        </Nav.Item>
         <Nav.Item>
           <Nav.Link onClick={() => handleScrollTo('progress-summary')} href="#progress-summary">
             進捗サマリー

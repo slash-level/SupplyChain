@@ -320,7 +320,6 @@ const UnachievedItems: React.FC <{
                                                                                 </div>
                                                                                 <div className="p-3 mt-2 bg-light rounded"><ReactMarkdown>{criterion.advice.advice_text}</ReactMarkdown></div>
                                                                                 <div className="text-end mt-2">
-                                                                                    <div className="small text-muted mb-2">※API制限により更新に失敗する場合があります</div>
                                                                                     <Button variant="outline-info" size="sm" onClick={() => onGetAdvice(criterion, req)} disabled={isLoading}>
                                                                                         {isLoading ? <><Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" /> 更新中...</> : '内容を更新する'}
                                                                                     </Button>
@@ -328,7 +327,6 @@ const UnachievedItems: React.FC <{
                                                                             </div>
                                                                         ) : (
                                                                             <div className="text-end">
-                                                                                <div className="small text-muted mb-2">※AI生成には10〜20秒ほどかかります。また、API制限により失敗する場合があります。</div>
                                                                                 <Button variant="info" size="sm" onClick={() => onGetAdvice(criterion, req)} disabled={isLoading}>
                                                                                     {isLoading ? <><Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" /> 生成中...</> : 'AIによる改善アドバイスを生成'}
                                                                                 </Button>
@@ -418,52 +416,68 @@ function App() {
       setMessage('評価データを読み込み中...');
       setLoadingActionItems(true);
 
-      fetch(`/api/evaluationset/${evaluationSetId}`)
-        .then(res => res.ok ? res.json() : null)
-        .then(data => { if (data) setEvaluationSetName(data.name); })
-        .catch(console.error);
+      const fetchData = async () => {
+        try {
+            const resSet = await fetch(`/api/evaluationset/${evaluationSetId}`);
+            if (!resSet.ok) {
+                // Evaluation set not found or ID is malformed (e.g. after DB reset)
+                console.warn(`Evaluation set ${evaluationSetId} could not be retrieved. Resetting...`);
+                localStorage.removeItem('selectedEvaluationSetId');
+                setEvaluationSetId(null);
+                setNotification({ type: 'danger', message: '選択された評価セットが見つかりませんでした。削除されたか、データに不整合が発生した可能性があります。' });
+                return;
+            }
+            
+            const dataSet = await resSet.json();
+            setEvaluationSetName(dataSet.name);
 
-      Promise.all([
-        fetch('/api/criteria').then(res => res.json()),
-        fetch(`/api/answers/${evaluationSetId}`).then(res => res.json()),
-        fetch(`/api/actionitems/${evaluationSetId}`).then(res => res.json())
-      ])
-      .then(([criteriaData, answersData, actionItemsData]: [Criterion[], { requirement_id: string, criterion_id: string, status: Status, notes: string, advice?: AIAdvice }[], ActionItem[]]) => {
-        const answersMap = new Map<string, { status: Status, notes: string, advice?: AIAdvice }>(answersData.map(a => [`${a.requirement_id}-${a.criterion_id}`, { status: a.status, notes: a.notes, advice: a.advice }]));
-        const criteriaWithAnswers: Criterion[] = criteriaData.map((c: any) => ({
-          ...c,
-          status: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.status || '未評価',
-          notes: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.notes || '',
-          advice: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.advice
-        }));
-        const groupedByReqId = new Map<string, Criterion[]>();
-        criteriaWithAnswers.forEach(c => {
-            const group = groupedByReqId.get(c.requirement_id) || [];
-            group.push(c);
-            groupedByReqId.set(c.requirement_id, group);
-        });
-        const finalRequirements: Requirement[] = Array.from(groupedByReqId.entries()).map(([reqId, criteria]) => ({
-            id: reqId,
-            name: criteria[0].requirement_name,
-            text: criteria[0].requirement_text,
-            category1_no: criteria[0].category1_no,
-            category1: criteria[0].category1,
-            category2_no: criteria[0].category2_no,
-            category2: criteria[0].category2,
-            criteria: criteria,
-            overallStatus: calculateOverallStatus(criteria)
-        }));
-        setAllRequirements(finalRequirements);
-        setActionItems(actionItemsData);
-        setMessage(`✓ データを読み込みました。`);
-      })
-      .catch(error => {
-        console.error('Fetch error:', error);
-        setNotification({ type: 'danger', message: 'データの読み込みに失敗しました。' });
-      })
-      .finally(() => {
-        setLoadingActionItems(false);
-      });
+            const [criteriaData, answersData, actionItemsData] = await Promise.all([
+                fetch('/api/criteria').then(res => res.ok ? res.json() : []),
+                fetch(`/api/answers/${evaluationSetId}`).then(res => res.ok ? res.json() : []),
+                fetch(`/api/actionitems/${evaluationSetId}`).then(res => res.ok ? res.json() : [])
+            ]);
+
+            const answersMap = new Map<string, { status: Status, notes: string, advice?: AIAdvice }>(answersData.map((a: any) => [`${a.requirement_id}-${a.criterion_id}`, { status: a.status, notes: a.notes, advice: a.advice }]));
+            
+            const criteriaWithAnswers: Criterion[] = criteriaData.map((c: any) => ({
+            ...c,
+            status: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.status || '未評価',
+            notes: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.notes || '',
+            advice: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.advice
+            }));
+
+            const groupedByReqId = new Map<string, Criterion[]>();
+            criteriaWithAnswers.forEach(c => {
+                const group = groupedByReqId.get(c.requirement_id) || [];
+                group.push(c);
+                groupedByReqId.set(c.requirement_id, group);
+            });
+
+            const finalRequirements: Requirement[] = Array.from(groupedByReqId.entries()).map(([reqId, criteria]) => ({
+                id: reqId,
+                name: criteria[0].requirement_name,
+                text: criteria[0].requirement_text,
+                category1_no: criteria[0].category1_no,
+                category1: criteria[0].category1,
+                category2_no: criteria[0].category2_no,
+                category2: criteria[0].category2,
+                criteria: criteria,
+                overallStatus: calculateOverallStatus(criteria)
+            }));
+
+            setAllRequirements(finalRequirements);
+            setActionItems(actionItemsData);
+            setMessage(`✓ データを読み込みました。`);
+
+        } catch (error) {
+            console.error('Fetch error:', error);
+            setNotification({ type: 'danger', message: 'データの読み込みに失敗しました。' });
+        } finally {
+            setLoadingActionItems(false);
+        }
+      };
+
+      fetchData();
     } else {
       setAllRequirements([]);
       setActionItems([]);
@@ -472,14 +486,13 @@ function App() {
   }, [evaluationSetId]);
 
   const handleCriterionUpdate = (updatedCriterion: Criterion) => {
-    const newRequirements = allRequirements.map(req => {
+    setAllRequirements(prev => prev.map(req => {
         if (req.id === updatedCriterion.requirement_id) {
             const newCriteria = req.criteria.map(c => c.criterion_id === updatedCriterion.criterion_id ? updatedCriterion : c);
             return { ...req, criteria: newCriteria, overallStatus: calculateOverallStatus(newCriteria) };
         }
         return req;
-    });
-    setAllRequirements(newRequirements);
+    }));
     if (user && evaluationSetId) {
       fetch('/api/answers', {
         method: 'POST',
@@ -519,10 +532,24 @@ function App() {
         }),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(data.message || 'AIアドバイスの生成中に不明なエラーが発生しました。');
+        const errorText = await response.text();
+        let errorMessage = `Server Error: ${response.status} ${response.statusText}`;
+        try {
+            const errorJson = JSON.parse(errorText);
+            if (errorJson.message) errorMessage = errorJson.message;
+            if (errorJson.error) errorMessage = errorJson.error;
+        } catch (e) {
+            if (errorText.length < 200) errorMessage += ` (${errorText})`;
+        }
+        throw new Error(errorMessage);
+      }
+
+      let data: any;
+      try {
+        data = await response.json();
+      } catch (e) {
+        throw new Error('サーバーからの応答が無効です (JSON parse error)。');
       }
       
       setAllRequirements(prevRequirements => prevRequirements.map(r => {
@@ -777,8 +804,15 @@ function App() {
         <main className={`px-md-4 scrollable-main ${evaluationSetId ? 'col-md-9 ms-sm-auto col-lg-10' : 'col-12'}`}>
           {evaluationSetId ? (
             <>
-              <h1 className="mt-3">評価項目</h1>
-              {evaluationSetName && <h4 className="mb-4 text-primary">評価セット: {evaluationSetName}</h4>}
+              <div className="d-flex align-items-center justify-content-between mt-3 mb-4">
+                <div className="d-flex align-items-baseline">
+                  <h1 className="mb-0">評価項目</h1>
+                  {evaluationSetName && <span className="text-muted h4 ms-3">({evaluationSetName})</span>}
+                </div>
+                <Button variant="outline-primary" size="sm" onClick={() => setEvaluationSetId(null)}>
+                    評価セット選択に戻る
+                </Button>
+              </div>
               <p className="lead">{message}</p>
               <div className="d-flex justify-content-between align-items-center mb-4">
                 <div className="card w-100">
@@ -844,20 +878,33 @@ function App() {
         </main>
       </div>
       <Modal show={showPasswordChangeModal} onHide={handleClosePasswordChangeModal} centered>
-        <Modal.Header closeButton><Modal.Title>パスワードの変更</Modal.Title></Modal.Header>
+        <Modal.Header closeButton>
+          <Modal.Title>パスワードの変更</Modal.Title>
+        </Modal.Header>
         <Modal.Body>
           {passwordChangeSuccess && <Alert variant="success">{passwordChangeSuccess}</Alert>}
           {passwordChangeError && <Alert variant="danger">{passwordChangeError}</Alert>}
           <Form onSubmit={handlePasswordChange}>
-            <Form.Group className="mb-3" controlId="currentPassword"><Form.Label>現在のパスワード</Form.Label><Form.Control type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required /></Form.Group>
-            <Form.Group className="mb-3" controlId="newPassword"><Form.Label>新しいパスワード</Form.Label><Form.Control type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required /></Form.Group>
-            <Form.Group className="mb-3" controlId="confirmPassword"><Form.Label>新しいパスワード（確認用）</Form.Label><Form.Control type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required /></Form.Group>
+            <Form.Group className="mb-3" controlId="currentPassword">
+              <Form.Label>現在のパスワード</Form.Label>
+              <Form.Control type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required />
+            </Form.Group>
+            <Form.Group className="mb-3" controlId="newPassword">
+              <Form.Label>新しいパスワード</Form.Label>
+              <Form.Control type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
+            </Form.Group>
+            <Form.Group className="mb-3" controlId="confirmPassword">
+              <Form.Label>新しいパスワード（確認用）</Form.Label>
+              <Form.Control type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required />
+            </Form.Group>
             <Button variant="primary" type="submit">パスワードを更新</Button>
           </Form>
         </Modal.Body>
       </Modal>
       <Modal show={showActionItemDeleteConfirm} onHide={handleActionItemDeleteCancel} centered>
-        <Modal.Header closeButton><Modal.Title>アクションアイテムの削除確認</Modal.Title></Modal.Header>
+        <Modal.Header closeButton>
+          <Modal.Title>アクションアイテムの削除確認</Modal.Title>
+        </Modal.Header>
         <Modal.Body>本当にこのアクションアイテムを削除しますか？この操作は元に戻せません。</Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={handleActionItemDeleteCancel} disabled={isDeletingActionItem}>キャンセル</Button>
