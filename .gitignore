@@ -16,6 +16,10 @@ server/.env
 
 # Service Account Credentials
 supplychain*.json
-\n# Private Development Notes\nDEV_NOTES.md
+
+# Data and Scripts
 20251226_3.csv
 convert_csv.js
+
+# Private Development Notes
+DEV_NOTES.md
