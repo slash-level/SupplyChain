@@ -33,7 +33,7 @@ const Sidebar: React.FC<SidebarProps> = ({ groupedRequirements, onBackToSelectio
   });
 
   return (
-    <div className="pt-3">
+    <div className="pt-3 pb-5" style={{ height: 'calc(100vh - 60px)', overflowY: 'auto' }}>
       <Nav className="flex-column">
         <Nav.Item className="mb-2">
             <Nav.Link onClick={onBackToSelection} className="text-secondary fw-bold" style={{ cursor: 'pointer' }}>
@@ -67,22 +67,27 @@ const Sidebar: React.FC<SidebarProps> = ({ groupedRequirements, onBackToSelectio
                 <Nav.Link 
                   onClick={() => handleScrollTo(`category-${category1.replaceAll('/', '-')}`)} 
                   href={`#category-${category1.replaceAll('/', '-')}`}
-                  className="fw-bold"
+                  className="fw-bold text-wrap"
+                  style={{ wordBreak: 'break-all' }}
                 >
                   {firstReq?.category1_no}. {category1}
                 </Nav.Link>
                 <Nav className="flex-column ms-3">
-                  {sortedCat2Keys.map((category2) => (
+                  {sortedCat2Keys.map((category2) => {
+                    const cat2Req = subCategories[category2][0];
+                    if (!cat2Req) return null;
+                    return (
                     <Nav.Item key={category2}>
                        <Nav.Link 
-                        onClick={() => handleScrollTo(`category-${category1.replaceAll('/', '-')}`)} 
-                        href={`#category-${category1.replaceAll('/', '-')}`}
-                        className="small"
+                        onClick={() => handleScrollTo(`subcategory-${firstReq?.category1_no}-${cat2Req.category2_no}`)} 
+                        href={`#subcategory-${firstReq?.category1_no}-${cat2Req.category2_no}`}
+                        className="small text-wrap"
+                        style={{ wordBreak: 'break-all' }}
                       >
-                        {subCategories[category2][0]?.category2_no}. {category2}
+                        {cat2Req.category2_no}. {category2}
                       </Nav.Link>
                     </Nav.Item>
-                  ))}
+                  )})}
                 </Nav>
               </Nav.Item>
             );

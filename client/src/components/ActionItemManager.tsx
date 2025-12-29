@@ -104,7 +104,7 @@ const ActionItemManager: React.FC<ActionItemManagerProps> = ({
 
   const getCriterionText = (requirementId: string, criterionId: string): string => {
     const criterion = requirements.flatMap(r => r.criteria).find(c => c.requirement_id === requirementId && c.criterion_id === criterionId);
-    return criterion ? `(${requirementId}-${criterionId}) ${criterion.criterion_text}` : `不明な評価基準 (${requirementId}-${criterionId})`;
+    return criterion ? `★${criterion.star_level} [${criterion.criterion_id}] ${criterion.criterion_text.substring(0, 50)}...` : `不明な評価基準 [${criterionId}]`;
   }
 
   return (
@@ -136,8 +136,10 @@ const ActionItemManager: React.FC<ActionItemManagerProps> = ({
                 <td>{item.dueDate ? new Date(item.dueDate).toLocaleDateString() : ''}</td>
                 <td>{item.status}</td>
                 <td>
-                  <Button variant="outline-secondary" size="sm" onClick={() => handleShowModal(item)}>編集</Button>
-                  <Button variant="outline-danger" size="sm" className="ms-2" onClick={() => onDeleteActionItem(item.actionItemId)}>削除</Button>
+                  <div className="d-flex flex-column gap-1">
+                    <Button variant="outline-secondary" size="sm" className="text-nowrap w-100" onClick={() => handleShowModal(item)}>編集</Button>
+                    <Button variant="outline-danger" size="sm" className="text-nowrap w-100" onClick={() => onDeleteActionItem(item.actionItemId)}>削除</Button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -155,11 +157,19 @@ const ActionItemManager: React.FC<ActionItemManagerProps> = ({
               <Form.Label>関連する評価基準 <span className="text-danger small">(必須)</span></Form.Label>
               <Form.Select name="criterion_id" value={formData.criterion_id} onChange={handleChange} required>
                 <option value="">選択してください</option>
-                {unachievedCriteria.map(c => (
-                  <option key={`${c.requirement_id}-${c.criterion_id}`} value={c.criterion_id}>
-                    ({c.requirement_id}-{c.criterion_id}) {c.criterion_text}
-                  </option>
-                ))}
+                {requirements.map(req => {
+                    const availableCriteria = req.criteria.filter(c => c.status === '未達成' || c.status === '一部達成');
+                    if (availableCriteria.length === 0) return null;
+                    return (
+                        <optgroup key={req.id} label={`${req.id} ${req.text.substring(0, 30)}...`}>
+                            {availableCriteria.map(c => (
+                                <option key={c.criterion_id} value={c.criterion_id}>
+                                    ★{c.star_level} [{c.criterion_id}] {c.criterion_text.substring(0, 40)}...
+                                </option>
+                            ))}
+                        </optgroup>
+                    );
+                })}
               </Form.Select>
             </Form.Group>
             <Form.Group className="mb-3">

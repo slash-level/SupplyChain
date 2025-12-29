@@ -232,9 +232,9 @@ const UnachievedItems: React.FC <{
     requirements: Requirement[], 
     starFilter: '3' | '4',
     onGetAdvice: (criterion: Criterion, requirement: Requirement) => void,
-    adviceLoadingFor: string | null,
+    loadingAdviceIds: Set<string>, // Changed prop type
     adviceError: { criterionId: string; message: string } | null
-}> = ({ requirements, starFilter, onGetAdvice, adviceLoadingFor, adviceError }) => {
+}> = ({ requirements, starFilter, onGetAdvice, loadingAdviceIds, adviceError }) => {
     const groupedUnachieved = useMemo(() => {
         const grouped: Map<string, Map<string, Map<string, { req: Requirement; criteria: Criterion[] }>>> = new Map();
 
@@ -293,7 +293,7 @@ const UnachievedItems: React.FC <{
                                                     </div>
                                                     <div className="list-group">
                                                         {criteria.map(criterion => {
-                                                            const isLoading = adviceLoadingFor === criterion.criterion_id;
+                                                            const isLoading = loadingAdviceIds.has(criterion.criterion_id); // Changed check
                                                             const isThisItemError = adviceError?.criterionId === criterion.criterion_id;
                                                             return (
                                                                 <div key={criterion.criterion_id} className="list-group-item list-group-item-action flex-column align-items-start">
@@ -320,6 +320,7 @@ const UnachievedItems: React.FC <{
                                                                                 </div>
                                                                                 <div className="p-3 mt-2 bg-light rounded"><ReactMarkdown>{criterion.advice.advice_text}</ReactMarkdown></div>
                                                                                 <div className="text-end mt-2">
+                                                                                    <div className="small text-muted mb-2">※API制限により更新に失敗する場合があります</div>
                                                                                     <Button variant="outline-info" size="sm" onClick={() => onGetAdvice(criterion, req)} disabled={isLoading}>
                                                                                         {isLoading ? <><Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" /> 更新中...</> : '内容を更新する'}
                                                                                     </Button>
@@ -327,6 +328,7 @@ const UnachievedItems: React.FC <{
                                                                             </div>
                                                                         ) : (
                                                                             <div className="text-end">
+                                                                                <div className="small text-muted mb-2">※AI生成には10〜20秒ほどかかります。また、API制限により失敗する場合があります。</div>
                                                                                 <Button variant="info" size="sm" onClick={() => onGetAdvice(criterion, req)} disabled={isLoading}>
                                                                                     {isLoading ? <><Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" /> 生成中...</> : 'AIによる改善アドバイスを生成'}
                                                                                 </Button>
@@ -369,7 +371,7 @@ function App() {
   const [actionItems, setActionItems] = useState<ActionItem[]>([]);
   const [loadingActionItems, setLoadingActionItems] = useState(false);
 
-  const [adviceLoadingFor, setAdviceLoadingFor] = useState<string | null>(null);
+  const [loadingAdviceIds, setLoadingAdviceIds] = useState<Set<string>>(new Set()); // Changed state
   const [adviceError, setAdviceError] = useState<{ criterionId: string; message: string } | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
 
@@ -495,8 +497,14 @@ function App() {
 
   const handleGetAdvice = async (criterion: Criterion, req: Requirement) => {
     if (!user || !evaluationSetId) return;
-    if (adviceError?.criterionId === criterion.criterion_id) setAdviceError(null);
-    setAdviceLoadingFor(criterion.criterion_id);
+
+    if (adviceError?.criterionId === criterion.criterion_id) {
+      setAdviceError(null);
+    }
+    
+    // Add to loading set
+    setLoadingAdviceIds(prev => new Set(prev).add(criterion.criterion_id));
+
     try {
       const response = await fetch('/api/ai/advice', {
         method: 'POST',
@@ -510,21 +518,36 @@ function App() {
           notes: criterion.notes,
         }),
       });
+
       const data = await response.json();
-      if (!response.ok) throw new Error(data.message || 'AIアドバイスの生成中に不明なエラーが発生しました。');
-      const newRequirements = allRequirements.map(r => {
+
+      if (!response.ok) {
+        throw new Error(data.message || 'AIアドバイスの生成中に不明なエラーが発生しました。');
+      }
+      
+      setAllRequirements(prevRequirements => prevRequirements.map(r => {
         if (r.id === req.id) {
-          const newCriteria = r.criteria.map(c => c.criterion_id === criterion.criterion_id ? { ...c, advice: data } : c);
+          const newCriteria = r.criteria.map(c => {
+            if (c.criterion_id === criterion.criterion_id) {
+              return { ...c, advice: data };
+            }
+            return c;
+          });
           return { ...r, criteria: newCriteria };
         }
         return r;
-      });
-      setAllRequirements(newRequirements);
+      }));
+
     } catch (error: any) {
       console.error(error);
       setAdviceError({ criterionId: criterion.criterion_id, message: error.message });
     } finally {
-      setAdviceLoadingFor(null);
+      // Remove from loading set
+      setLoadingAdviceIds(prev => {
+          const next = new Set(prev);
+          next.delete(criterion.criterion_id);
+          return next;
+      });
     }
   };
 
@@ -680,9 +703,10 @@ function App() {
         const response = await fetch('/api/report/pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
+            body: JSON.stringify({
                 requirements: groupedForDisplay,
-                evaluationSetName: evaluationSetName // Add this line
+                evaluationSetName: evaluationSetName,
+                actionItems: actionItems // Pass action items to backend
             }),
         });
         if (!response.ok) {
@@ -785,7 +809,11 @@ function App() {
                     <div className="card-body">
                         {Object.entries(subCategories).sort((a, b) => (a[1][0]?.category2_no || '').localeCompare(b[1][0]?.category2_no || '', undefined, { numeric: true, sensitivity: 'base' }))
                             .map(([category2, items]: [string, Requirement[]]) => (
-                            <div key={category2} className="p-3 border rounded mb-3">
+                            <div 
+                                key={category2} 
+                                id={`subcategory-${items[0]?.category1_no}-${items[0]?.category2_no}`}
+                                className="p-3 border rounded mb-3"
+                            >
                                 <h4>{items[0]?.category2_no}. {category2}</h4>
                                 <Accordion alwaysOpen>
                                     {items.map((req) => (
@@ -797,7 +825,13 @@ function App() {
                     </div>
                 </div>
               ))}
-              <UnachievedItems requirements={filteredRequirements} starFilter={starFilter} onGetAdvice={handleGetAdvice} adviceLoadingFor={adviceLoadingFor} adviceError={adviceError} />
+              <UnachievedItems 
+                requirements={filteredRequirements} 
+                starFilter={starFilter} 
+                onGetAdvice={handleGetAdvice} 
+                loadingAdviceIds={loadingAdviceIds} // Pass new state
+                adviceError={adviceError}
+              />
               <ActionItemManager actionItems={actionItems} requirements={allRequirements} evaluationSetId={evaluationSetId} onAddActionItem={handleAddActionItem} onUpdateActionItem={handleUpdateActionItem} onDeleteActionItem={handleActionItemDeleteClick} />
             </>
           ) : (

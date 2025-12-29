@@ -918,7 +918,7 @@ function getStatusColor(status) {
 }
 
 // Function to generate the report HTML
-function generatePdfHtml(requirements, evaluationSetName) {
+function generatePdfHtml(requirements, evaluationSetName, actionItems) {
     let body = '';
 
     // Helper to safely get Category 1 No
@@ -1015,6 +1015,42 @@ function generatePdfHtml(requirements, evaluationSetName) {
         body += `</div>`; // end category-group
     }
 
+    // Add Action Items Section
+    if (actionItems && actionItems.length > 0) {
+        body += `<div class="category-group" style="page-break-before: always;"><h1>アクションアイテム一覧</h1>`;
+        body += `
+            <table class="criteria-table">
+                <colgroup>
+                    <col style="width: 15%;">
+                    <col style="width: 45%;">
+                    <col style="width: 15%;">
+                    <col style="width: 15%;">
+                    <col style="width: 10%;">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>関連評価基準ID</th>
+                        <th>タスク内容</th>
+                        <th>担当者</th>
+                        <th>期日</th>
+                        <th>ステータス</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${actionItems.map(item => `
+                        <tr>
+                            <td>${escapeHtml(item.criterion_id)}</td>
+                            <td>${escapeHtml(item.taskDescription).replace(/\n/g, '<br>')}</td>
+                            <td>${escapeHtml(item.assignee)}</td>
+                            <td>${item.dueDate ? new Date(item.dueDate).toLocaleDateString('ja-JP') : ''}</td>
+                            <td>${escapeHtml(item.status)}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>`;
+    }
+
     return `
         <!DOCTYPE html>
         <html lang="ja">
@@ -1077,7 +1113,7 @@ function generatePdfHtml(requirements, evaluationSetName) {
                     width: 100%;
                     border-collapse: collapse;
                     font-size: 10px;
-                    table-layout: fixed; /* 固定幅レイアウト */
+                    table-layout: fixed; /*固定幅レイアウト */
                 }
                 .criteria-table th, .criteria-table td {
                     border: 1px solid #ddd;
@@ -1112,7 +1148,7 @@ function generatePdfHtml(requirements, evaluationSetName) {
     `;
 }
 app.post('/api/report/pdf', async (req, res) => {
-    const { requirements, evaluationSetName } = req.body;
+    const { requirements, evaluationSetName, actionItems } = req.body;
     if (!requirements) {
         return res.status(400).send({ error: 'Invalid data format: requirements data is missing.' });
     }
@@ -1121,67 +1157,38 @@ app.post('/api/report/pdf', async (req, res) => {
     const tempFileName = `report-${Date.now()}.pdf`;
     const tempFilePath = path.join(__dirname, tempFileName);
 
-                        try {
+    try {
+        const htmlContent = generatePdfHtml(requirements, evaluationSetName || '', actionItems);
+        
+        browser = await puppeteer.launch({
+            headless: true,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage', // Docker環境でのメモリクラッシュ防止
+                '--disable-gpu',           // GPU無効化（サーバー負荷軽減）
+                '--no-first-run',
+            ],
+            protocolTimeout: 300000 // タイムアウトを300秒(5分)に延長
+        });
+        const page = await browser.newPage();
+        
+        await page.setContent(htmlContent, {
+            waitUntil: 'networkidle0',
+            timeout: 300000 // コンテンツ読み込みタイムアウトを300秒に延長
+        });
+    
+        await page.pdf({
+            path: tempFilePath,
+            format: 'Letter',
+            printBackground: false,
+            margin: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
+            timeout: 300000 // PDF生成タイムアウトを300秒に延長
+        });
 
-                            const htmlContent = generatePdfHtml(requirements, evaluationSetName || '');
-
-                            
-
-                            browser = await puppeteer.launch({
-
-                                headless: true,
-
-                                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
-
-                                args: [
-
-                                    '--no-sandbox',
-
-                                    '--disable-setuid-sandbox',
-
-                                    '--disable-dev-shm-usage', // Docker環境でのメモリクラッシュ防止
-
-                                    '--disable-gpu',           // GPU無効化（サーバー負荷軽減）
-
-                                    '--no-first-run',
-
-                                ],
-
-                                protocolTimeout: 300000 // タイムアウトを300秒(5分)に延長
-
-                            });
-
-                            const page = await browser.newPage();
-
-                            
-
-                            await page.setContent(htmlContent, { 
-
-                                waitUntil: 'networkidle0',
-
-                                timeout: 300000 // コンテンツ読み込みタイムアウトを300秒に延長
-
-                            });
-
-                        
-
-                            await page.pdf({
-
-                                path: tempFilePath,
-
-                                format: 'Letter',
-
-                                printBackground: false,
-
-                                margin: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
-
-                                timeout: 300000 // PDF生成タイムアウトを300秒に延長
-
-                            });
-
-                    
-
-                            res.sendFile(tempFilePath, { headers: { 'Content-Disposition': 'attachment; filename=security-report.pdf' } }, (err) => {            if (err) {
+        res.sendFile(tempFilePath, { headers: { 'Content-Disposition': 'attachment; filename=security-report.pdf' } }, (err) => {
+            if (err) {
                 console.error('Error sending file:', err);
                 if (!res.headersSent) {
                     res.status(500).send({ error: 'Failed to send PDF file.' });
