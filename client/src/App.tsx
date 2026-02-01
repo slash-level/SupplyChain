@@ -704,9 +704,24 @@ function App() {
   };
 
   const handleExportCSV = () => {
-    const headers = ["大分類No.", "大分類", "中分類No.", "中分類", "要求事項No.", "★3/★4", "要求事項名", "要求事項", "評価基準No.", "評価基準", "評価", "備考"];
+    const headers = ["大分類No.", "大分類", "中分類No.", "中分類", "要求事項No.", "★3", "★4", "要求事項名", "要求事項", "★3/★4", "評価基準No.", "評価基準", "評価結果", "備考"];
     const rows = filteredRequirements.flatMap(req => 
-        req.criteria.map(crit => [req.category1_no, req.category1, req.category2_no, req.category2, req.id, crit.star_level, req.name || '', req.text, crit.criterion_id, crit.criterion_text, crit.status, crit.notes])
+        req.criteria.map(crit => [
+            req.category1_no, 
+            req.category1, 
+            req.category2_no, 
+            req.category2, 
+            req.id, 
+            crit.level3_no ? '○' : '', 
+            crit.Level4_no ? '○' : '', 
+            req.name || '', 
+            req.text, 
+            crit.star_level === 3 ? '★3' : '★4', 
+            crit.criterion_id, 
+            crit.criterion_text, 
+            crit.status, 
+            crit.notes
+        ])
     );
     const escapeCsvCell = (cell: any): string => {
         const strCell = String(cell === null || cell === undefined ? '' : cell);
