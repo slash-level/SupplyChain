@@ -15,16 +15,25 @@
       user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
     -->
     <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-    <!--
-      Notice the use of %PUBLIC_URL% in the tags above.
-      It will be replaced with the URL of the `public` folder during the build.
-      Only files inside the `public` folder can be referenced from the HTML.
+    
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-8HFWN97JQZ"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-8HFWN97JQZ');
+    </script>
 
-      Unlike "/favicon.ico" or "favicon.ico", "%PUBLIC_URL%/favicon.ico" will
-      work correctly both with client-side routing and a non-root public URL.
-      Learn how to configure a non-root public URL by running `npm run build`.
-    -->
-    <title>React App</title>
+    <!-- SNS Meta Tags (OGP) -->
+    <meta property="og:title" content="セキュリティセルフチェック支援ツール | サプライチェーン対策をAIで効率化" />
+    <meta property="og:description" content="面倒なセキュリティチェックシートの回答をAIがサポート。無料で今すぐ診断を開始し、改善アドバイス付きのPDFレポートを出力できます。" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://supplychain-security.onrender.com/" />
+    <meta property="og:image" content="%PUBLIC_URL%/logo512.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <title>セキュリティセルフチェック支援ツール</title>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>

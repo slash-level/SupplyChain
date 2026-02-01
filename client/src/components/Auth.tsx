@@ -143,11 +143,41 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
     <div className="container mt-5">
       <div className="row justify-content-center">
         <div className="col-md-6">
-          <div className="card">
-            <div className="card-header text-center">
-              <h3>{isRegistering ? '新規登録' : 'ログイン'}</h3>
+          <div className="text-center mb-4">
+            <h1 className="h3 mb-3 fw-normal">セキュリティセルフチェック</h1>
+            <p className="text-muted">
+              自組織のセキュリティ対策状況を診断し、<br />
+              AIによる改善アドバイス付きのレポートを作成しましょう。
+            </p>
+          </div>
+
+          <div className="card shadow-sm mb-4">
+            <div className="card-body p-4">
+              <h4 className="card-title text-center mb-4">まずは無料で診断を開始</h4>
+              <p className="text-center small text-muted mb-4">
+                アカウント登録は不要です。今すぐチェックを始められます。
+              </p>
+              <div className="d-grid">
+                <button 
+                  className="btn btn-success btn-lg mb-3" 
+                  onClick={handleAnonymousLogin}
+                  disabled={isLoggingInAnonymously}
+                >
+                  {isLoggingInAnonymously ? '診断を開始中...' : '登録せずに今すぐ試す'}
+                </button>
+              </div>
+              <p className="text-center x-small text-muted mb-0" style={{ fontSize: '0.75rem' }}>
+                ※PDFレポートの出力も可能です。<br />
+                ※データを保存し、後で続きから再開したい場合はログインが必要です。
+              </p>
             </div>
-            <div className="card-body">
+          </div>
+
+          <div className="card shadow-sm">
+            <div className="card-header bg-light text-center py-3">
+              <h5 className="mb-0">{isRegistering ? 'アカウントを新規作成' : 'ログイン'}</h5>
+            </div>
+            <div className="card-body p-4">
               <form onSubmit={handleSubmit}>
                 <div className="mb-3">
                   <label htmlFor="emailInput" className="form-label">メールアドレス</label>
@@ -190,8 +220,6 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
                       {' '}および{' '}
                       <a href="https://github.com/slash-level/SupplyChain/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">プライバシーポリシー</a>
                       に同意します
-                      <br />
-                      <span className="text-muted">（外部サイト: GitHubへ移動します）</span>
                     </label>
                   </div>
                 )}
@@ -210,38 +238,20 @@ const Auth: React.FC<AuthProps> = ({ onAuthSuccess }) => {
               </form>
               <div className="mt-3 text-center">
                 <button
-                  className="btn btn-link"
+                  className="btn btn-link btn-sm text-decoration-none"
                   onClick={toggleRegistering}
                 >
-                  {isRegistering ? 'すでにアカウントをお持ちの方はこちら' : '新規登録はこちら'}
+                  {isRegistering ? 'すでにアカウントをお持ちの方はこちら' : '新しくアカウントを作る'}
                 </button>
               </div>
               {!isRegistering && (
-                <div className="mt-2 text-center border-top pt-3">
+                <div className="mt-2 text-center">
                   <button
-                    className="btn btn-link"
+                    className="btn btn-link btn-sm text-secondary text-decoration-none"
                     onClick={handlePasswordReset}
                   >
                     パスワードをお忘れですか？
                   </button>
-                </div>
-              )}
-
-              {/* Guest Login Section */}
-              {!isRegistering && (
-                <div className="text-center mt-3 border-top pt-3">
-                  <p className="small text-muted mb-2">登録せずに試してみたい方はこちら</p>
-                  <button 
-                    className="btn btn-outline-secondary w-100" 
-                    onClick={handleAnonymousLogin}
-                    disabled={isLoggingInAnonymously}
-                  >
-                    {isLoggingInAnonymously ? 'ログイン中...' : 'ゲストとして利用する'}
-                  </button>
-                  <div className="small text-muted mt-2" style={{ fontSize: '0.75rem' }}>
-                    ※ゲスト利用の場合、ログアウトやブラウザのキャッシュ削除を行うと、入力したデータには二度とアクセスできなくなります。<br />
-                    ※将来的に一部機能が制限される可能性があります。
-                  </div>
                 </div>
               )}
             </div>
