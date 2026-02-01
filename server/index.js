@@ -1,3 +1,13 @@
+console.log("--- NODE PROCESS STARTING ---");
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason, p) => {
+  console.error('UNHANDLED REJECTION:', reason);
+  process.exit(1);
+});
+
 const express = require('express');
 const { Sequelize, DataTypes } = require('sequelize');
 const path = require('path');
@@ -30,6 +40,7 @@ async function loadCsvData() {
             columns: true,
             skip_empty_lines: true,
             trim: true,
+            bom: true, // BOMを考慮して読み込み
         }));
 
     for await (const record of parser) {
@@ -1238,18 +1249,40 @@ async function setupAndStartServer() {
     console.log(`Step 3: Found ${count} existing criteria.`);
 
     if (count === 0) {
-      console.log("Step 4: Seeding new data from CSV...");
+      console.log("Step 4: Seeding new data from CSV (mapping official format)...");
       const rawCsvRecords = await loadCsvData();
       const seedData = [];
       for (const row of rawCsvRecords) {
-        if (!row['requirement_id'] || !row['requirement_text'] || isNaN(parseInt(row.star_level, 10))) {
-            continue; 
-        }
-        seedData.push(row);
+        // 要求事項No. と 評価基準No. が必須
+        const reqId = row['要求事項No.'];
+        const critId = row['評価基準No.'];
+        const starStr = row['★3/★4'] || '';
+        
+        if (!reqId || !critId) continue;
+
+        // 星レベルの数値化
+        let starLevel = 4;
+        if (starStr.includes('★3')) starLevel = 3;
+        else if (starStr.includes('★4')) starLevel = 4;
+
+        seedData.push({
+            category1_no: row['大分類No.'],
+            category1: row['大分類'],
+            category2_no: row['中分類No.'],
+            category2: row['中分類'],
+            requirement_id: reqId,
+            requirement_name: row['要求事項名'],
+            requirement_text: row['要求事項'],
+            star_level: starLevel,
+            criterion_id: critId,
+            criterion_text: row['評価基準'],
+            level3_no: row['★3'] === '○' ? critId : null,
+            Level4_no: row['★4'] === '○' ? critId : null
+        });
       }
 
       await Criterion.bulkCreate(seedData);
-      console.log(`Step 5: Seeding completed! ${seedData.length} criteria loaded.`);
+      console.log(`Step 5: Seeding completed! ${seedData.length} criteria loaded and mapped.`);
     }
 
     console.log("Step 6: Preparing to start server...");
