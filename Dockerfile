@@ -1,5 +1,5 @@
 # ステージ1: クライアントのビルド (builder)
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
@@ -34,11 +34,12 @@ RUN cd client && npm run build
 # ---
 
 # ステージ2: サーバーの実行環境 (runner)
-FROM node:18-alpine
+FROM node:20-alpine
 
 WORKDIR /app
 
 # Install Chromium and dependencies for Puppeteer
+# また、sqlite3 などのネイティブモジュールのビルドに必要なツール (python3, make, g++) を追加
 RUN apk add --no-cache \
       chromium \
       nss \
@@ -49,7 +50,10 @@ RUN apk add --no-cache \
       ttf-freefont \
       nodejs \
       yarn \
-      font-noto-cjk
+      font-noto-cjk \
+      python3 \
+      make \
+      g++
 
 # Set Puppeteer environment variables
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
