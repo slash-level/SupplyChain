@@ -9,7 +9,7 @@ process.on('unhandledRejection', (reason, p) => {
 });
 
 const express = require('express');
-const { Sequelize, DataTypes } = require('sequelize');
+const { Sequelize, DataTypes, Op } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
 const { parse } = require('csv-parse');
@@ -98,6 +98,7 @@ const Criterion = sequelize.define('Criterion', {
     category2: DataTypes.STRING,
     level3_no: DataTypes.STRING,
     Level4_no: DataTypes.STRING,
+    explanation: { type: DataTypes.TEXT, allowNull: true }, // 解説マスタ用
 });
 
 const User = sequelize.define('User', {
@@ -113,6 +114,14 @@ const User = sequelize.define('User', {
         unique: true
     },
     companyName: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    role: {
+        type: DataTypes.STRING,
+        defaultValue: 'user' // e.g., 'admin', 'user'
+    },
+    companyId: {
         type: DataTypes.STRING,
         allowNull: true
     }
@@ -437,7 +446,7 @@ app.get('/api/criteria', async (req, res) => {
 
 app.post('/api/users', async (req, res) => {
     try {
-        const { firebaseUid, email, companyName } = req.body;
+        const { firebaseUid, email, companyName, role, companyId } = req.body;
         // 必須チェック: emailはゲストの場合ない可能性があるのでチェックしない
         if (!firebaseUid) {
             return res.status(400).json({ error: 'Missing required fields: firebaseUid' });
@@ -449,7 +458,12 @@ app.post('/api/users', async (req, res) => {
 
         const [user, created] = await User.findOrCreate({
             where: { firebaseUid },
-            defaults: { email: emailToSave, companyName }
+            defaults: { 
+                email: emailToSave, 
+                companyName,
+                role: role || 'user',
+                companyId
+            }
         });
 
         // 既存ユーザーの更新処理
@@ -458,8 +472,15 @@ app.post('/api/users', async (req, res) => {
             if (emailToSave && user.email !== emailToSave) {
                 user.email = emailToSave;
             }
-            if (companyName && !user.companyName) {
+            // 組織名、権限、組織IDを常に最新に更新
+            if (companyName !== undefined) {
                 user.companyName = companyName;
+            }
+            if (role) {
+                user.role = role;
+            }
+            if (companyId !== undefined) {
+                user.companyId = companyId;
             }
             await user.save();
         }
@@ -541,9 +562,33 @@ app.delete('/api/users/:firebaseUid', async (req, res) => {
 app.get('/api/evaluationsets/:firebaseUid', async (req, res) => {
     try {
         const { firebaseUid } = req.params;
+        
+        // --- 簡易連携ロジック ---
+        // 1. リクエストを送ってきたユーザーの情報を取得
+        const requestingUser = await User.findByPk(firebaseUid);
+        
+        let whereClause = { firebaseUid };
+
+        // 2. 管理者の場合、同じ組織(companyId)の全評価セットを表示可能にする
+        if (requestingUser && requestingUser.role === 'admin' && requestingUser.companyId) {
+            // 同じcompanyIdを持つ全ユーザーのUIDを取得
+            const colleagueUids = await User.findAll({
+                attributes: ['firebaseUid'],
+                where: { companyId: requestingUser.companyId },
+                raw: true
+            }).then(users => users.map(u => u.firebaseUid));
+
+            whereClause = {
+                firebaseUid: {
+                    [Op.in]: colleagueUids
+                }
+            };
+        }
+
         const evaluationSets = await EvaluationSet.findAll({
-            where: { firebaseUid },
-            order: [['createdAt', 'DESC']]
+            where: whereClause,
+            order: [['createdAt', 'DESC']],
+            include: [{ model: User, attributes: ['email', 'companyName'] }] // 誰のセットか分かるようにユーザー情報を追加
         });
         res.json(evaluationSets);
     } catch (error) {
@@ -556,7 +601,9 @@ app.get('/api/evaluationsets/:firebaseUid', async (req, res) => {
 app.get('/api/evaluationset/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const evaluationSet = await EvaluationSet.findByPk(id);
+        const evaluationSet = await EvaluationSet.findByPk(id, {
+            include: [{ model: User, attributes: ['email', 'companyName', 'companyId'] }]
+        });
         if (!evaluationSet) {
             return res.status(404).json({ error: 'EvaluationSet not found' });
         }

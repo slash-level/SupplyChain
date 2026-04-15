@@ -5,6 +5,7 @@ import Auth from './components/Auth';
 import EvaluationSetSelector from './components/EvaluationSetSelector'; // Import the new component
 import ActionItemManager from './components/ActionItemManager'; // Import the new component
 import Dashboard from './components/Dashboard'; // Import the new Dashboard component
+import Settings from './components/Settings'; // 新しく追加
 import DeleteAccountModal from './components/DeleteAccountModal';
 import { auth } from './firebase';
 import { User, onAuthStateChanged, signOut, EmailAuthProvider, reauthenticateWithCredential, updatePassword } from 'firebase/auth';
@@ -14,7 +15,7 @@ import ReactMarkdown from 'react-markdown';
 import Modal from 'react-bootstrap/Modal';
 import Form from 'react-bootstrap/Form';
 import Alert from 'react-bootstrap/Alert';
-import { Container, Nav, Navbar } from 'react-bootstrap';
+import { Container, Nav, Navbar, Badge } from 'react-bootstrap';
 
 export type Status = '未評価' | '達成' | '未達成' | '該当なし' | '一部達成';
 
@@ -357,10 +358,13 @@ function App() {
   const [message, setMessage] = useState('...');
   const [user, setUser] = useState<User | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
+  const [currentView, setCurrentView] = useState<'main'>('main'); // settingsを削除
+  const [showSettingsModal, setShowSettingsModal] = useState(false); // モーダル用のステート
   const [evaluationSetId, setEvaluationSetId] = useState<string | null>(() => {
     return localStorage.getItem('selectedEvaluationSetId');
   });
   const [evaluationSetName, setEvaluationSetName] = useState<string>('');
+  const [evaluationSetCreator, setEvaluationSetCreator] = useState<{ email: string, companyName: string } | null>(null);
   const [starFilter, setStarFilter] = useState<'3' | '4'>(() => {
     const savedFilter = localStorage.getItem('starFilter');
     return savedFilter === '4' ? '4' : '3';
@@ -392,6 +396,7 @@ function App() {
     } else {
       localStorage.removeItem('selectedEvaluationSetId');
       setEvaluationSetName('');
+      setEvaluationSetCreator(null); // 追加
     }
   }, [evaluationSetId]);
 
@@ -430,6 +435,18 @@ function App() {
             
             const dataSet = await resSet.json();
             setEvaluationSetName(dataSet.name);
+            if (dataSet.User) {
+              setEvaluationSetCreator({
+                email: dataSet.User.email,
+                companyName: dataSet.User.companyName
+              });
+            }
+            if (dataSet.User) {
+              setEvaluationSetCreator({
+                email: dataSet.User.email,
+                companyName: dataSet.User.companyName
+              });
+            }
 
             const [criteriaData, answersData, actionItemsData] = await Promise.all([
                 fetch('/api/criteria').then(res => res.ok ? res.json() : []),
@@ -793,11 +810,12 @@ function App() {
     <div className="container-fluid full-height-layout px-0">
         <Navbar bg="dark" variant="dark" expand="lg" sticky="top" className="shadow">
           <Container fluid>
-            <Navbar.Brand href="#" className="px-3 fs-6">セキュリティセルフチェック支援ツール</Navbar.Brand>
+            <Navbar.Brand href="#" className="px-3 fs-6" onClick={() => setCurrentView('main')}>セキュリティセルフチェック支援ツール</Navbar.Brand>
             <Navbar.Toggle aria-controls="responsive-navbar-nav" />
             <Navbar.Collapse id="responsive-navbar-nav">
               <Nav className="ms-auto align-items-center">
                 {user && <Navbar.Text className="px-3 small text-light">ようこそ、{user.email || 'ゲスト'}さん</Navbar.Text>}
+                <Nav.Link as={Button} variant="dark" className="px-3" onClick={() => setShowSettingsModal(true)}>組織設定</Nav.Link>
                 <Nav.Link as={Button} variant="dark" className="px-3" onClick={() => setShowPasswordChangeModal(true)}>パスワード変更</Nav.Link>
                 <Nav.Link as={Button} variant="dark" className="px-3" onClick={handleLogout}>ログアウト</Nav.Link>
                 <Nav.Link as={Button} variant="danger" className="px-3 ms-lg-2" onClick={() => setShowDeleteModal(true)}>アカウント削除</Nav.Link>
@@ -823,6 +841,11 @@ function App() {
                 <div className="d-flex align-items-baseline">
                   <h1 className="mb-0">評価項目</h1>
                   {evaluationSetName && <span className="text-muted h4 ms-3">({evaluationSetName})</span>}
+                  {evaluationSetCreator?.companyName && (
+                    <Badge bg="info" className="ms-3 align-self-center fw-normal">
+                      作成者: {evaluationSetCreator.companyName}
+                    </Badge>
+                  )}
                 </div>
                 <Button variant="outline-primary" size="sm" onClick={() => setEvaluationSetId(null)}>
                     評価セット選択に戻る
@@ -892,6 +915,18 @@ function App() {
           )}
         </main>
       </div>
+      <footer className="footer mt-auto py-3 bg-light">
+        <div className="container text-center">
+          <span className="text-muted small">
+            <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-decoration-none">利用規約・免責事項</a>
+            <span className="mx-2">|</span>
+            <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-decoration-none">プライバシーポリシー</a>
+            <span className="mx-2">|</span>
+            <a href="https://docs.google.com/forms/d/e/1FAIpQLSci5IKrSAJPov5Dri2heP6RVmD_LTGJKioGeKVS32Vf3UpWbA/viewform?usp=header" target="_blank" rel="noopener noreferrer" className="text-decoration-none">フィードバック</a>
+          </span>
+        </div>
+      </footer>
+      <Settings show={showSettingsModal} onHide={() => setShowSettingsModal(false)} user={user} />
       <Modal show={showPasswordChangeModal} onHide={handleClosePasswordChangeModal} centered>
         <Modal.Header closeButton>
           <Modal.Title>パスワードの変更</Modal.Title>
@@ -927,17 +962,6 @@ function App() {
         </Modal.Footer>
       </Modal>
       <DeleteAccountModal isOpen={showDeleteModal} onClose={() => setShowDeleteModal(false)} onConfirm={handleConfirmDelete} />
-      <footer className="footer mt-auto py-3 bg-light">
-        <div className="container text-center">
-          <span className="text-muted small">
-            <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-decoration-none">利用規約・免責事項</a>
-            <span className="mx-2">|</span>
-            <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-decoration-none">プライバシーポリシー</a>
-            <span className="mx-2">|</span>
-            <a href="https://docs.google.com/forms/d/e/1FAIpQLSci5IKrSAJPov5Dri2heP6RVmD_LTGJKioGeKVS32Vf3UpWbA/viewform?usp=header" target="_blank" rel="noopener noreferrer" className="text-decoration-none">フィードバック</a>
-          </span>
-        </div>
-      </footer>
     </div>
   );
 }

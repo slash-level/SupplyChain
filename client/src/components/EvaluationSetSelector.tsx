@@ -7,6 +7,7 @@ import Card from 'react-bootstrap/Card';
 import Spinner from 'react-bootstrap/Spinner';
 import Alert from 'react-bootstrap/Alert';
 import Modal from 'react-bootstrap/Modal';
+import Badge from 'react-bootstrap/Badge';
 
 interface EvaluationSet {
   evaluationSetId: string;
@@ -14,6 +15,10 @@ interface EvaluationSet {
   description: string | null;
   createdAt: string;
   updatedAt: string;
+  User?: {
+    email: string | null;
+    companyName: string | null;
+  };
 }
 
 interface EvaluationSetSelectorProps {
@@ -207,11 +212,21 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
                 className="d-flex justify-content-between align-items-center"
               >
                 <div className="me-auto" style={{ maxWidth: '60%' }}>
-                  <a href="#" onClick={(e) => { e.preventDefault(); onSelect(set.evaluationSetId); }} className="fw-bold text-decoration-none text-truncate d-block">
-                    {set.name}
-                  </a>
+                  <div className="d-flex align-items-center mb-1">
+                    <a href="#" onClick={(e) => { e.preventDefault(); onSelect(set.evaluationSetId); }} className="fw-bold text-decoration-none text-truncate">
+                      {set.name}
+                    </a>
+                    {set.User?.companyName && (
+                      <Badge bg="info" className="ms-2 small fw-normal">
+                        {set.User.companyName}
+                      </Badge>
+                    )}
+                  </div>
                   {set.description && <small className="text-muted d-block text-truncate">{set.description}</small>}
-                  <small className="text-muted">最終更新: {new Date(set.updatedAt).toLocaleDateString()}</small>
+                  <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                    最終更新: {new Date(set.updatedAt).toLocaleDateString()} 
+                    {set.User?.email && ` (${set.User.email})`}
+                  </div>
                 </div>
                 <div className="d-flex align-items-center">
                     <Button 
@@ -252,7 +267,7 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
                     type="text"
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
-                    placeholder="例: 2025年度 第1四半期評価"
+                    placeholder="例: 2026年度評価"
                     required
                   />
                 </Form.Group>
@@ -263,7 +278,7 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
                     rows={2}
                     value={newDescription}
                     onChange={(e) => setNewDescription(e.target.value)}
-                    placeholder="例: ISMS内部監査のための自己評価"
+                    placeholder="例: サプライチェーンセキュリティ評価のための自己点検"
                   />
                 </Form.Group>
                 <div className="d-flex justify-content-end">
