@@ -8,11 +8,14 @@ import Spinner from 'react-bootstrap/Spinner';
 import Alert from 'react-bootstrap/Alert';
 import Modal from 'react-bootstrap/Modal';
 import Badge from 'react-bootstrap/Badge';
+import Row from 'react-bootstrap/Row';
+import Col from 'react-bootstrap/Col';
 
 interface EvaluationSet {
   evaluationSetId: string;
   name: string;
   description: string | null;
+  starLevel: number;
   createdAt: string;
   updatedAt: string;
   User?: {
@@ -34,6 +37,7 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
   const [showNewForm, setShowNewForm] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
+  const [newStarLevel, setNewStarLevel] = useState<number>(3);
   const [isCreating, setIsCreating] = useState(false);
 
   // Editing state
@@ -87,6 +91,7 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
           firebaseUid: user.uid,
           name: newName,
           description: newDescription,
+          starLevel: newStarLevel
         }),
       });
 
@@ -216,6 +221,9 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
                     <a href="#" onClick={(e) => { e.preventDefault(); onSelect(set.evaluationSetId); }} className="fw-bold text-decoration-none text-truncate">
                       {set.name}
                     </a>
+                    <Badge bg="secondary" className="ms-2 small fw-normal">
+                      ★{set.starLevel}
+                    </Badge>
                     {set.User?.companyName && (
                       <Badge bg="info" className="ms-2 small fw-normal">
                         {set.User.companyName}
@@ -262,7 +270,7 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
               <Form onSubmit={handleCreate}>
                 <h3 className="mb-3">新しい評価セットを作成</h3>
                 <Form.Group className="mb-3" controlId="newSetName">
-                  <Form.Label>評価名</Form.Label>
+                  <Form.Label className="fw-bold">評価名</Form.Label>
                   <Form.Control
                     type="text"
                     value={newName}
@@ -271,8 +279,53 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
                     required
                   />
                 </Form.Group>
+
+                <Form.Group className="mb-3">
+                  <Form.Label className="fw-bold">制度における段階の選択</Form.Label>
+                  <Row className="g-2">
+                    <Col sm={6}>
+                      <Card 
+                        className={`h-100 cursor-pointer ${newStarLevel === 3 ? 'border-primary bg-light' : ''}`}
+                        onClick={() => setNewStarLevel(3)}
+                      >
+                        <Card.Body className="py-2 px-3">
+                          <Form.Check
+                            type="radio"
+                            label={<span className="fw-bold">★3段階</span>}
+                            name="starLevel"
+                            checked={newStarLevel === 3}
+                            onChange={() => setNewStarLevel(3)}
+                          />
+                          <small className="text-muted d-block ps-4">
+                            全てのサプライチェーン企業が最低限実装すべきセキュリティ対策
+                          </small>
+                        </Card.Body>
+                      </Card>
+                    </Col>
+                    <Col sm={6}>
+                      <Card 
+                        className={`h-100 cursor-pointer ${newStarLevel === 4 ? 'border-primary bg-light' : ''}`}
+                        onClick={() => setNewStarLevel(4)}
+                      >
+                        <Card.Body className="py-2 px-3">
+                          <Form.Check
+                            type="radio"
+                            label={<span className="fw-bold">★4段階</span>}
+                            name="starLevel"
+                            checked={newStarLevel === 4}
+                            onChange={() => setNewStarLevel(4)}
+                          />
+                          <small className="text-muted d-block ps-4">
+                            サプライチェーン企業等が標準的に目指すべきセキュリティ対策
+                          </small>
+                        </Card.Body>
+                      </Card>
+                    </Col>
+                  </Row>
+                </Form.Group>
+
                 <Form.Group className="mb-3" controlId="newSetDescription">
-                  <Form.Label>説明（任意）</Form.Label>
+                  <Form.Label className="fw-bold">説明（任意）</Form.Label>
                   <Form.Control
                     as="textarea"
                     rows={2}

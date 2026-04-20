@@ -435,11 +435,8 @@ function App() {
             
             const dataSet = await resSet.json();
             setEvaluationSetName(dataSet.name);
-            if (dataSet.User) {
-              setEvaluationSetCreator({
-                email: dataSet.User.email,
-                companyName: dataSet.User.companyName
-              });
+            if (dataSet.starLevel) {
+              setStarFilter(dataSet.starLevel.toString() as '3' | '4');
             }
             if (dataSet.User) {
               setEvaluationSetCreator({
@@ -810,7 +807,9 @@ function App() {
     <div className="container-fluid full-height-layout px-0">
         <Navbar bg="dark" variant="dark" expand="lg" sticky="top" className="shadow">
           <Container fluid>
-            <Navbar.Brand href="#" className="px-3 fs-6" onClick={() => setCurrentView('main')}>セキュリティセルフチェック支援ツール</Navbar.Brand>
+            <Navbar.Brand href="#" className="px-3 fs-6" onClick={() => setCurrentView('main')}>
+                サプライチェーン強化に向けたセキュリティ対策評価制度 セルフチェック支援ツール
+            </Navbar.Brand>
             <Navbar.Toggle aria-controls="responsive-navbar-nav" />
             <Navbar.Collapse id="responsive-navbar-nav">
               <Nav className="ms-auto align-items-center">

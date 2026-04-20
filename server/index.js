@@ -124,7 +124,38 @@ const User = sequelize.define('User', {
     companyId: {
         type: DataTypes.STRING,
         allowNull: true
+    },
+    organizationId: {
+        type: DataTypes.UUID,
+        allowNull: true
+    },
+    orgStatus: {
+        type: DataTypes.STRING,
+        defaultValue: 'approved'
     }
+});
+
+const Organization = sequelize.define('Organization', {
+    id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
+    },
+    name: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    inviteCode: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true
+    },
+    ownerUid: {
+        type: DataTypes.STRING,
+        allowNull: false
+    }
+}, {
+    timestamps: true
 });
 
 const Answer = sequelize.define('Answer', {
@@ -194,6 +225,11 @@ const EvaluationSet = sequelize.define('EvaluationSet', {
         type: DataTypes.TEXT,
         allowNull: true,
     },
+    starLevel: { // 評価基準レベルを追加 (3 or 4)
+        type: DataTypes.INTEGER,
+        defaultValue: 3,
+        allowNull: false,
+    },
     status: {
         type: DataTypes.STRING,
         defaultValue: 'active', // e.g., 'active', 'completed'
@@ -251,6 +287,9 @@ const ActionItem = sequelize.define('ActionItem', {
 });
 
 // Associations
+Organization.hasMany(User, { foreignKey: 'organizationId' });
+User.belongsTo(Organization, { foreignKey: 'organizationId' });
+
 EvaluationSet.hasMany(Answer, { foreignKey: 'evaluationSetId', onDelete: 'CASCADE' });
 Answer.belongsTo(EvaluationSet, { foreignKey: 'evaluationSetId' });
 
@@ -403,10 +442,160 @@ async function getAIAdvice(prompt) {
 }
 
 
+// --- Helper Functions ---
+function generateInviteCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 読み間違いを防ぐため I, O, 0, 1 を除外
+    let code = '';
+    for (let i = 0; i < 9; i++) {
+        if (i > 0 && i % 3 === 0) code += '-';
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+}
+
 // --- API Endpoints ---
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is healthy' });
+});
+
+// Create a new organization
+app.post('/api/organizations', async (req, res) => {
+    try {
+        const { name, ownerUid } = req.body;
+        if (!name || !ownerUid) {
+            return res.status(400).json({ error: 'Missing required fields: name, ownerUid' });
+        }
+
+        const inviteCode = generateInviteCode();
+        const organization = await Organization.create({
+            name,
+            inviteCode,
+            ownerUid
+        });
+
+        // 作成者を管理者として組織に紐付け
+        await User.update(
+            { organizationId: organization.id, role: 'admin' },
+            { where: { firebaseUid: ownerUid } }
+        );
+
+        res.status(201).json(organization);
+    } catch (error) {
+        console.error('Error creating organization:', error);
+        res.status(500).json({ error: 'Failed to create organization' });
+    }
+});
+
+// Join an organization via invite code
+app.post('/api/organizations/join', async (req, res) => {
+    try {
+        const { inviteCode, firebaseUid } = req.body;
+        if (!inviteCode || !firebaseUid) {
+            return res.status(400).json({ error: 'Missing required fields: inviteCode, firebaseUid' });
+        }
+
+        const organization = await Organization.findOne({
+            where: { inviteCode: inviteCode.toUpperCase() }
+        });
+
+        if (!organization) {
+            return res.status(404).json({ error: '無効な招待コードです。' });
+        }
+
+        // ユーザーを組織に紐付け
+        await User.update(
+            { organizationId: organization.id, role: 'user' },
+            { where: { firebaseUid } }
+        );
+
+        res.json({ message: '組織に参加しました。', organization });
+    } catch (error) {
+        console.error('Error joining organization:', error);
+        res.status(500).json({ error: 'Failed to join organization' });
+    }
+});
+
+// Get organization details
+app.get('/api/organizations/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const organization = await Organization.findByPk(id, {
+            include: [{ model: User, attributes: ['firebaseUid', 'email', 'companyName', 'role'] }]
+        });
+        if (!organization) {
+            return res.status(404).json({ error: 'Organization not found' });
+        }
+        res.json(organization);
+    } catch (error) {
+        console.error('Error fetching organization:', error);
+        res.status(500).json({ error: 'Failed to fetch organization' });
+    }
+});
+
+// Remove a member from organization
+app.delete('/api/organizations/members/:memberUid', async (req, res) => {
+    try {
+        const { memberUid } = req.params;
+        const { adminUid } = req.body; // リクエストした管理者のUID
+
+        const requestingUser = await User.findByPk(adminUid);
+        if (!requestingUser || requestingUser.role !== 'admin') {
+            return res.status(403).json({ error: '管理者権限が必要です。' });
+        }
+
+        const organization = await Organization.findByPk(requestingUser.organizationId);
+        if (!organization || organization.ownerUid !== adminUid) {
+            // 組織のオーナー（作成者）のみがメンバーを削除できるようにする（より厳格な制限）
+            return res.status(403).json({ error: '組織のオーナーのみがメンバーを削除できます。' });
+        }
+
+        if (memberUid === adminUid) {
+            return res.status(400).json({ error: '自分自身を組織から削除することはできません。' });
+        }
+
+        await User.update(
+            { organizationId: null, role: 'user' },
+            { where: { firebaseUid: memberUid, organizationId: organization.id } }
+        );
+
+        res.json({ message: 'メンバーを組織から除外しました。' });
+    } catch (error) {
+        console.error('Error removing member:', error);
+        res.status(500).json({ error: 'Failed to remove member' });
+    }
+});
+
+// Update a member's role within an organization
+app.put('/api/organizations/members/:memberUid/role', async (req, res) => {
+    try {
+        const { memberUid } = req.params;
+        const { adminUid, newRole } = req.body;
+
+        if (!['admin', 'user'].includes(newRole)) {
+            return res.status(400).json({ error: '無効な権限です。' });
+        }
+
+        const requestingUser = await User.findByPk(adminUid);
+        if (!requestingUser || requestingUser.role !== 'admin') {
+            return res.status(403).json({ error: '管理者権限が必要です。' });
+        }
+
+        const organization = await Organization.findByPk(requestingUser.organizationId);
+        if (!organization || organization.ownerUid !== adminUid) {
+            return res.status(403).json({ error: '組織のオーナーのみが権限を変更できます。' });
+        }
+
+        await User.update(
+            { role: newRole },
+            { where: { firebaseUid: memberUid, organizationId: organization.id } }
+        );
+
+        res.json({ message: '権限を更新しました。' });
+    } catch (error) {
+        console.error('Error updating member role:', error);
+        res.status(500).json({ error: 'Failed to update role' });
+    }
 });
 
 // 新しいエンドポイントを追加
@@ -446,7 +635,7 @@ app.get('/api/criteria', async (req, res) => {
 
 app.post('/api/users', async (req, res) => {
     try {
-        const { firebaseUid, email, companyName, role, companyId } = req.body;
+        const { firebaseUid, email, companyName, role, companyId, organizationId } = req.body;
         // 必須チェック: emailはゲストの場合ない可能性があるのでチェックしない
         if (!firebaseUid) {
             return res.status(400).json({ error: 'Missing required fields: firebaseUid' });
@@ -462,23 +651,31 @@ app.post('/api/users', async (req, res) => {
                 email: emailToSave, 
                 companyName,
                 role: role || 'user',
-                companyId
+                companyId,
+                organizationId: organizationId || null,
+                orgStatus: 'approved'
             }
         });
 
         // 既存ユーザーの更新処理
         if (!created) {
-            // メールアドレスが新たに設定された場合(ゲスト->登録など)のみ更新
+            // メールアドレスが未設定（null）だったり、変更があった場合に更新
             if (emailToSave && user.email !== emailToSave) {
                 user.email = emailToSave;
             }
-            // 組織名、権限、組織IDを常に最新に更新
+            // 表示名を更新
             if (companyName !== undefined) {
                 user.companyName = companyName;
             }
+            // 権限（role）の更新を許可する
             if (role) {
                 user.role = role;
             }
+            // 新しい組織ID（招待コード方式）の紐付け
+            if (organizationId !== undefined) {
+                user.organizationId = organizationId;
+            }
+            // 互換性のため古いcompanyIdも維持
             if (companyId !== undefined) {
                 user.companyId = companyId;
             }
@@ -569,12 +766,12 @@ app.get('/api/evaluationsets/:firebaseUid', async (req, res) => {
         
         let whereClause = { firebaseUid };
 
-        // 2. 管理者の場合、同じ組織(companyId)の全評価セットを表示可能にする
-        if (requestingUser && requestingUser.role === 'admin' && requestingUser.companyId) {
-            // 同じcompanyIdを持つ全ユーザーのUIDを取得
+        // 2. 管理者の場合、同じ組織(organizationId)の全評価セットを表示可能にする
+        if (requestingUser && requestingUser.role === 'admin' && requestingUser.organizationId) {
+            // 同じorganizationIdを持つ全ユーザーのUIDを取得
             const colleagueUids = await User.findAll({
                 attributes: ['firebaseUid'],
-                where: { companyId: requestingUser.companyId },
+                where: { organizationId: requestingUser.organizationId },
                 raw: true
             }).then(users => users.map(u => u.firebaseUid));
 
@@ -617,7 +814,7 @@ app.get('/api/evaluationset/:id', async (req, res) => {
 // Create a new evaluation set
 app.post('/api/evaluationsets', async (req, res) => {
     try {
-        const { firebaseUid, name, description } = req.body;
+        const { firebaseUid, name, description, starLevel } = req.body;
         if (!firebaseUid || !name) {
             return res.status(400).json({ error: 'Missing required fields: firebaseUid, name' });
         }
@@ -634,7 +831,12 @@ app.post('/api/evaluationsets', async (req, res) => {
             return res.status(409).json({ error: '同名の評価セットは既に存在します。別の名前を指定してください。' });
         }
 
-        const evaluationSet = await EvaluationSet.create({ firebaseUid, name, description });
+        const evaluationSet = await EvaluationSet.create({ 
+            firebaseUid, 
+            name, 
+            description, 
+            starLevel: starLevel || 3 
+        });
         res.status(201).json(evaluationSet);
     } catch (error) {
         console.error('Error creating evaluation set:', error);
