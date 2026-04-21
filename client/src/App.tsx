@@ -388,7 +388,17 @@ function App() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [notification, setNotification] = useState<{type: 'success' | 'danger', message: string} | null>(null);
 
-  useEffect(() => { localStorage.setItem('starFilter', starFilter); }, [starFilter]);
+  useEffect(() => { 
+    localStorage.setItem('starFilter', starFilter); 
+    // DBへの同期
+    if (evaluationSetId && user) {
+      fetch(`/api/evaluationsets/${evaluationSetId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ starLevel: parseInt(starFilter, 10) }),
+      }).catch(err => console.error('Failed to sync starLevel:', err));
+    }
+  }, [starFilter, evaluationSetId, user]);
 
   useEffect(() => {
     if (evaluationSetId) {

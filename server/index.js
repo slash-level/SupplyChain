@@ -230,6 +230,11 @@ const EvaluationSet = sequelize.define('EvaluationSet', {
         defaultValue: 3,
         allowNull: false,
     },
+    isTemplate: { // 組織内テンプレートフラグを追加
+        type: DataTypes.BOOLEAN,
+        defaultValue: false,
+        allowNull: false,
+    },
     status: {
         type: DataTypes.STRING,
         defaultValue: 'active', // e.g., 'active', 'completed'
@@ -848,7 +853,7 @@ app.post('/api/evaluationsets', async (req, res) => {
 app.put('/api/evaluationsets/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, description, status } = req.body;
+        const { name, description, status, starLevel } = req.body;
         const evaluationSet = await EvaluationSet.findByPk(id);
         if (!evaluationSet) {
             return res.status(404).json({ error: 'EvaluationSet not found' });
@@ -857,11 +862,98 @@ app.put('/api/evaluationsets/:id', async (req, res) => {
         evaluationSet.name = name ?? evaluationSet.name;
         evaluationSet.description = description ?? evaluationSet.description;
         evaluationSet.status = status ?? evaluationSet.status;
+        evaluationSet.starLevel = starLevel ?? evaluationSet.starLevel; // 追加
         await evaluationSet.save();
         res.json(evaluationSet);
     } catch (error) {
         console.error('Error updating evaluation set:', error);
         res.status(500).json({ error: 'Failed to update evaluation set' });
+    }
+});
+
+// Toggle template status
+app.put('/api/evaluationsets/:id/template', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { firebaseUid, isTemplate } = req.body;
+
+        const evaluationSet = await EvaluationSet.findByPk(id);
+        if (!evaluationSet) return res.status(404).json({ error: 'Evaluation set not found' });
+        
+        // オーナーチェック
+        if (evaluationSet.firebaseUid !== firebaseUid) {
+            return res.status(403).json({ error: 'オーナーのみがテンプレート設定を変更できます。' });
+        }
+
+        evaluationSet.isTemplate = isTemplate;
+        await evaluationSet.save();
+        res.json(evaluationSet);
+    } catch (error) {
+        console.error('Error toggling template:', error);
+        res.status(500).json({ error: 'Failed to update template status' });
+    }
+});
+
+// Get organization templates
+app.get('/api/organizations/:organizationId/templates', async (req, res) => {
+    try {
+        const { organizationId } = req.params;
+        const templates = await EvaluationSet.findAll({
+            where: { isTemplate: true },
+            include: [{
+                model: User,
+                where: { organizationId },
+                attributes: ['companyName', 'email']
+            }],
+            order: [['updatedAt', 'DESC']]
+        });
+        res.json(templates);
+    } catch (error) {
+        console.error('Error fetching templates:', error);
+        res.status(500).json({ error: 'Failed to fetch templates' });
+    }
+});
+
+// Copy evaluation set (Template to New Set)
+app.post('/api/evaluationsets/copy', async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { templateSetId, firebaseUid, name, description } = req.body;
+
+        // 1. テンプレートの情報を取得
+        const templateSet = await EvaluationSet.findByPk(templateSetId);
+        if (!templateSet) throw new Error('Template not found');
+
+        // 2. 新しい評価セットを作成
+        const newSet = await EvaluationSet.create({
+            firebaseUid,
+            name,
+            description,
+            starLevel: templateSet.starLevel, // 基準レベルもコピー
+            isTemplate: false,
+            status: 'active'
+        }, { transaction });
+
+        // 3. 回答をコピー
+        const answers = await Answer.findAll({ where: { evaluationSetId: templateSetId } });
+        const newAnswers = answers.map(a => ({
+            evaluationSetId: newSet.evaluationSetId,
+            requirement_id: a.requirement_id,
+            criterion_id: a.criterion_id,
+            status: a.status,
+            notes: a.notes
+        }));
+
+        if (newAnswers.length > 0) {
+            await Answer.bulkCreate(newAnswers, { transaction });
+        }
+
+        await transaction.commit();
+        res.status(201).json(newSet);
+    } catch (error) {
+        await transaction.rollback();
+        console.error('Error copying evaluation set:', error);
+        res.status(500).json({ error: 'Failed to copy template' });
     }
 });
 
