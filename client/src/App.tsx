@@ -39,6 +39,7 @@ export interface Criterion {
   category2: string;
   level3_no: string;
   Level4_no: string;
+  explanation?: string; // 解説マスタ用
   // Frontend-managed state
   status: Status;
   notes: string;
@@ -113,9 +114,11 @@ const StatusBadge: React.FC <{ status: Status }> = ({ status }) => {
 };
 
 const CriterionItem: React.FC <{
-    criterion: Criterion, 
-    onUpdate: (updatedCriterion: Criterion) => void 
-}> = ({ criterion, onUpdate }) => {
+    criterion: Criterion,
+    requirement: Requirement,
+    onUpdate: (updatedCriterion: Criterion) => void,
+    onShowExplanation: (criterion: Criterion) => void
+}> = ({ criterion, requirement, onUpdate, onShowExplanation }) => {
 
     const handleStatusChange = (newStatus: Status) => {
         onUpdate({ ...criterion, status: newStatus });
@@ -130,7 +133,17 @@ const CriterionItem: React.FC <{
             <div className="d-flex justify-content-between align-items-start">
                 <div className="me-auto">
                     <div className="fw-bold" style={{ whiteSpace: 'pre-wrap' }}>
-                        ★{criterion.star_level} {criterion.criterion_id}<br/>
+                        ★{criterion.star_level} {criterion.criterion_id}
+                        <Button 
+                            variant="link" 
+                            size="sm" 
+                            className="p-0 ms-2 text-decoration-none" 
+                            onClick={() => onShowExplanation(criterion)}
+                            title="この項目の解説を表示する"
+                        >
+                            📖 解説を表示
+                        </Button>
+                        <br/>
                         {criterion.criterion_text}
                     </div>
                 </div>
@@ -161,8 +174,9 @@ const CriterionItem: React.FC <{
 const RequirementItem: React.FC <{
     requirement: Requirement, 
     onUpdate: (updatedCriterion: Criterion) => void,
+    onShowExplanation: (criterion: Criterion) => void,
     starFilter: '3' | '4'
-}> = ({ requirement, onUpdate, starFilter }) => {
+}> = ({ requirement, onUpdate, onShowExplanation, starFilter }) => {
 
     return (
         <Accordion.Item eventKey={requirement.id} id={`req-item-${requirement.id}`}>
@@ -175,7 +189,13 @@ const RequirementItem: React.FC <{
             <Accordion.Body>
                 <div className="list-group">
                     {requirement.criteria.map(criterion => (
-                        <CriterionItem key={criterion.criterion_id} criterion={criterion} onUpdate={onUpdate} />
+                        <CriterionItem 
+                            key={criterion.criterion_id} 
+                            criterion={criterion} 
+                            requirement={requirement}
+                            onUpdate={onUpdate} 
+                            onShowExplanation={onShowExplanation}
+                        />
                     ))}
                 </div>
             </Accordion.Body>
@@ -377,6 +397,10 @@ function App() {
   const [adviceError, setAdviceError] = useState<{ criterionId: string; message: string } | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
 
+  // Explanation Modal State
+  const [showExplanationModal, setShowExplanationModal] = useState(false);
+  const [explanationModalContent, setExplanationModalContent] = useState({ title: '', text: '' });
+
   // State for Password Change Modal
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -467,7 +491,8 @@ function App() {
             ...c,
             status: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.status || '未評価',
             notes: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.notes || '',
-            advice: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.advice
+            advice: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.advice,
+            explanation: c.explanation // ここを追加
             }));
 
             const groupedByReqId = new Map<string, Criterion[]>();
@@ -530,6 +555,14 @@ function App() {
         }),
       });
     }
+  };
+
+  const handleShowExplanation = (criterion: Criterion) => {
+    setExplanationModalContent({
+      title: `解説: ${criterion.criterion_id}`,
+      text: criterion.explanation || 'この項目の解説は現在準備中です。'
+    });
+    setShowExplanationModal(true);
   };
 
   const handleGetAdvice = async (criterion: Criterion, req: Requirement) => {
@@ -898,7 +931,13 @@ function App() {
                                 <h4>{items[0]?.category2_no}. {category2}</h4>
                                 <Accordion alwaysOpen>
                                     {items.map((req) => (
-                                        <RequirementItem key={req.id} requirement={req} onUpdate={handleCriterionUpdate} starFilter={starFilter} />
+                                        <RequirementItem 
+                                            key={req.id} 
+                                            requirement={req} 
+                                            onUpdate={handleCriterionUpdate} 
+                                            onShowExplanation={handleShowExplanation}
+                                            starFilter={starFilter} 
+                                        />
                                     ))}
                                 </Accordion>
                             </div>
@@ -971,6 +1010,30 @@ function App() {
         </Modal.Footer>
       </Modal>
       <DeleteAccountModal isOpen={showDeleteModal} onClose={() => setShowDeleteModal(false)} onConfirm={handleConfirmDelete} />
+      <Modal show={showExplanationModal} onHide={() => setShowExplanationModal(false)} size="lg" centered>
+        <Modal.Header closeButton>
+          <Modal.Title>{explanationModalContent.title}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <div className="p-2" style={{ whiteSpace: 'pre-wrap' }}>
+            <ReactMarkdown>{explanationModalContent.text}</ReactMarkdown>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowExplanationModal(false)}>閉じる</Button>
+        </Modal.Footer>
+      </Modal>
+      <footer className="footer mt-auto py-3 bg-light">
+        <div className="container text-center">
+          <span className="text-muted small">
+            <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-decoration-none">利用規約・免責事項</a>
+            <span className="mx-2">|</span>
+            <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-decoration-none">プライバシーポリシー</a>
+            <span className="mx-2">|</span>
+            <a href="https://docs.google.com/forms/d/e/1FAIpQLSci5IKrSAJPov5Dri2heP6RVmD_LTGJKioGeKVS32Vf3UpWbA/viewform?usp=header" target="_blank" rel="noopener noreferrer" className="text-decoration-none">フィードバック</a>
+          </span>
+        </div>
+      </footer>
     </div>
   );
 }

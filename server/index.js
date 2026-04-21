@@ -1589,6 +1589,18 @@ async function setupAndStartServer() {
     const count = await Criterion.count();
     console.log(`Step 3: Found ${count} existing criteria.`);
 
+    // --- Master Explanation Loading ---
+    let masterExplanations = {};
+    const explanationPath = path.join(__dirname, 'master_explanations.json');
+    if (fs.existsSync(explanationPath)) {
+        try {
+            masterExplanations = JSON.parse(fs.readFileSync(explanationPath, 'utf8'));
+            console.log(`Loaded ${Object.keys(masterExplanations).length} master explanations.`);
+        } catch (e) {
+            console.error("Failed to parse master_explanations.json:", e);
+        }
+    }
+
     if (count === 0) {
       console.log("Step 4: Seeding new data from CSV (mapping official format)...");
       const rawCsvRecords = await loadCsvData();
@@ -1618,12 +1630,25 @@ async function setupAndStartServer() {
             criterion_id: critId,
             criterion_text: row['評価基準'],
             level3_no: row['★3'] === '○' ? critId : null,
-            Level4_no: row['★4'] === '○' ? critId : null
+            Level4_no: row['★4'] === '○' ? critId : null,
+            explanation: masterExplanations[critId] || null // 新規シーディング時に解説も設定
         });
       }
 
       await Criterion.bulkCreate(seedData);
       console.log(`Step 5: Seeding completed! ${seedData.length} criteria loaded and mapped.`);
+    } else {
+        // すでにデータがある場合でも、解説JSONの内容で既存レコードを更新する
+        if (Object.keys(masterExplanations).length > 0) {
+            console.log("Step 4 (Sync): Updating existing criteria with latest explanations from JSON...");
+            for (const [critId, text] of Object.entries(masterExplanations)) {
+                await Criterion.update(
+                    { explanation: text },
+                    { where: { criterion_id: critId } }
+                );
+            }
+            console.log("Step 5 (Sync): Explanations updated!");
+        }
     }
 
     console.log("Step 6: Preparing to start server...");
