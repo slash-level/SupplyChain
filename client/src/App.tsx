@@ -963,17 +963,6 @@ function App() {
           )}
         </main>
       </div>
-      <footer className="footer mt-auto py-3 bg-light">
-        <div className="container text-center">
-          <span className="text-muted small">
-            <a href="/terms.html" target="_blank" rel="noopener noreferrer" className="text-decoration-none">利用規約・免責事項</a>
-            <span className="mx-2">|</span>
-            <a href="/privacy.html" target="_blank" rel="noopener noreferrer" className="text-decoration-none">プライバシーポリシー</a>
-            <span className="mx-2">|</span>
-            <a href="https://docs.google.com/forms/d/e/1FAIpQLSci5IKrSAJPov5Dri2heP6RVmD_LTGJKioGeKVS32Vf3UpWbA/viewform?usp=header" target="_blank" rel="noopener noreferrer" className="text-decoration-none">フィードバック</a>
-          </span>
-        </div>
-      </footer>
       <Settings show={showSettingsModal} onHide={() => setShowSettingsModal(false)} user={user} />
       <Modal show={showPasswordChangeModal} onHide={handleClosePasswordChangeModal} centered>
         <Modal.Header closeButton>
