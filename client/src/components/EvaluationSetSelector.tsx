@@ -20,6 +20,7 @@ interface EvaluationSet {
   firebaseUid: string; // UIDでの比較用に保持
   createdAt: string;
   updatedAt: string;
+  progressRate?: number; // 進捗率を追加
   User?: {
     email: string | null;
     companyName: string | null;
@@ -309,7 +310,23 @@ const EvaluationSetSelector: React.FC<EvaluationSetSelectorProps> = ({ user, onS
                     )}
                   </div>
                   {set.description && <small className="text-muted d-block text-truncate">{set.description}</small>}
-                  <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                  
+                  {/* 進捗バーを追加 */}
+                  <div className="mt-2 d-flex align-items-center" style={{ width: '200px' }}>
+                    <div className="progress flex-grow-1" style={{ height: '8px' }}>
+                      <div 
+                        className={`progress-bar ${set.progressRate === 100 ? 'bg-success' : 'bg-primary'}`} 
+                        role="progressbar" 
+                        style={{ width: `${set.progressRate}%` }} 
+                        aria-valuenow={set.progressRate} 
+                        aria-valuemin={0} 
+                        aria-valuemax={100}
+                      ></div>
+                    </div>
+                    <span className="ms-2 small fw-bold text-muted">{set.progressRate}%</span>
+                  </div>
+
+                  <div className="text-muted mt-1" style={{ fontSize: '0.75rem' }}>
                     最終更新: {new Date(set.updatedAt).toLocaleDateString()} 
                     {set.User?.email && ` (${set.User.email})`}
                   </div>

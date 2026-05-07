@@ -18,7 +18,6 @@ const puppeteer = require('puppeteer');
 const admin = require('firebase-admin');
 
 // Firebase Admin SDK 初期化
-// GOOGLE_APPLICATION_CREDENTIALS 環境変数からサービスアカウントキーのパスを読み込む
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     admin.initializeApp({
         credential: admin.credential.applicationDefault()
@@ -26,10 +25,16 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     console.log("Firebase Admin SDK initialized successfully.");
 } else {
     console.warn("WARNING: GOOGLE_APPLICATION_CREDENTIALS is not set. Firebase Admin SDK will not be initialized.");
-    console.warn("Account deletion and other Firebase Admin functions will not work.");
 }
 
-let markedInstance; // markedのインスタンスを保持する変数
+let markedInstance;
+// markedの初期化 (必要に応じて)
+try {
+    const marked = require('marked');
+    markedInstance = marked.marked;
+} catch (e) {
+    console.warn("marked not found, markdown to html helper might fail.");
+}
 
 // --- CSV Data Loading ---
 async function loadCsvData() {
@@ -37,20 +42,24 @@ async function loadCsvData() {
     const parser = fs
         .createReadStream(path.join(__dirname, '../SC_Security.csv'))
         .pipe(parse({
-            columns: true,
+            columns: false, // 2行ヘッダーに対応するため配列として読み込む
             skip_empty_lines: true,
             trim: true,
-            bom: true, // BOMを考慮して読み込み
+            bom: true,
         }));
 
+    let lineCount = 0;
     for await (const record of parser) {
+        lineCount++;
+        // 経産省公式ファイルの1行目（カテゴリ）と2行目（文献名）をスキップ
+        if (lineCount <= 2) continue;
         records.push(record);
     }
     return records;
 }
 
 const app = express();
-const port = process.env.PORT || 3001; // 環境変数からポートを取得、なければ3001
+const port = process.env.PORT || 3001;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -61,18 +70,18 @@ const sequelize = DATABASE_URL
   ? new Sequelize(DATABASE_URL, {
       dialect: 'postgres',
       protocol: 'postgres',
-      logging: false, // 必要に応じてtrueに変更
+      logging: false,
       dialectOptions: {
         ssl: {
           require: true,
-          rejectUnauthorized: false // 本番環境ではtrueに設定することを推奨
+          rejectUnauthorized: false
         }
       }
     })
   : new Sequelize({
       dialect: 'sqlite',
       storage: path.join(__dirname, 'database.sqlite'),
-      logging: false, // 必要に応じてtrueに変更
+      logging: false,
     });
 
 // --- Database Models ---
@@ -98,314 +107,139 @@ const Criterion = sequelize.define('Criterion', {
     category2: DataTypes.STRING,
     level3_no: DataTypes.STRING,
     Level4_no: DataTypes.STRING,
-    explanation: { type: DataTypes.TEXT, allowNull: true }, // 解説マスタ用
+    explanation: { type: DataTypes.TEXT, allowNull: true },
+    // 参照文献フィールド
+    ref_nist: { type: DataTypes.TEXT, allowNull: true },
+    ref_cyber_essentials: { type: DataTypes.TEXT, allowNull: true },
+    ref_cmmc: { type: DataTypes.TEXT, allowNull: true },
+    ref_iso27001: { type: DataTypes.TEXT, allowNull: true },
+    ref_gov: { type: DataTypes.TEXT, allowNull: true },
+    ref_jais: { type: DataTypes.TEXT, allowNull: true },
 });
 
 const User = sequelize.define('User', {
-    firebaseUid: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        unique: true,
-        primaryKey: true
-    },
-    email: {
-        type: DataTypes.STRING,
-        allowNull: true, // ゲストユーザー(emailなし)を許可するためtrueに変更
-        unique: true
-    },
-    companyName: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    role: {
-        type: DataTypes.STRING,
-        defaultValue: 'user' // e.g., 'admin', 'user'
-    },
-    companyId: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    organizationId: {
-        type: DataTypes.UUID,
-        allowNull: true
-    },
-    orgStatus: {
-        type: DataTypes.STRING,
-        defaultValue: 'approved'
-    }
+    firebaseUid: { type: DataTypes.STRING, allowNull: false, unique: true, primaryKey: true },
+    email: { type: DataTypes.STRING, allowNull: true, unique: true },
+    companyName: { type: DataTypes.STRING, allowNull: true },
+    role: { type: DataTypes.STRING, defaultValue: 'user' },
+    companyId: { type: DataTypes.STRING, allowNull: true },
+    organizationId: { type: DataTypes.UUID, allowNull: true },
+    orgStatus: { type: DataTypes.STRING, defaultValue: 'approved' }
 });
 
 const Organization = sequelize.define('Organization', {
-    id: {
-        type: DataTypes.UUID,
-        defaultValue: DataTypes.UUIDV4,
-        primaryKey: true
-    },
-    name: {
-        type: DataTypes.STRING,
-        allowNull: false
-    },
-    inviteCode: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        unique: true
-    },
-    ownerUid: {
-        type: DataTypes.STRING,
-        allowNull: false
-    }
-}, {
-    timestamps: true
-});
+    id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    name: { type: DataTypes.STRING, allowNull: false },
+    inviteCode: { type: DataTypes.STRING, allowNull: false, unique: true },
+    ownerUid: { type: DataTypes.STRING, allowNull: false }
+}, { timestamps: true });
 
 const Answer = sequelize.define('Answer', {
-    evaluationSetId: {
-        type: DataTypes.UUID,
-        allowNull: false,
-        primaryKey: true,
-        references: {
-            model: 'EvaluationSets', // This is the table name, not the model name
-            key: 'evaluationSetId',
-        }
+    evaluationSetId: { 
+        type: DataTypes.UUID, 
+        allowNull: false, 
+        primaryKey: true, 
+        references: { model: 'EvaluationSets', key: 'evaluationSetId' } 
     },
-    requirement_id: {
-        type: DataTypes.STRING,
-        primaryKey: true,
-    },
-    criterion_id: {
-        type: DataTypes.STRING,
-        primaryKey: true,
-    },
-    status: {
-        type: DataTypes.STRING,
-        allowNull: false
-    },
-    notes: {
-        type: DataTypes.TEXT
-    }
+    requirement_id: { type: DataTypes.STRING, primaryKey: true },
+    criterion_id: { type: DataTypes.STRING, primaryKey: true },
+    status: { type: DataTypes.STRING, allowNull: false },
+    notes: { type: DataTypes.TEXT }
 });
 
 const AIAdvice = sequelize.define('AIAdvice', {
-    evaluationSetId: {
-        type: DataTypes.UUID,
-        allowNull: false,
-        primaryKey: true,
-        references: {
-            model: 'EvaluationSets', // This is the table name, not the model name
-            key: 'evaluationSetId',
-        }
+    evaluationSetId: { 
+        type: DataTypes.UUID, 
+        allowNull: false, 
+        primaryKey: true, 
+        references: { model: 'EvaluationSets', key: 'evaluationSetId' } 
     },
-    requirement_id: {
-        type: DataTypes.STRING,
-        primaryKey: true,
-    },
-    criterion_id: {
-        type: DataTypes.STRING,
-        primaryKey: true,
-    },
-    advice_text: {
-        type: DataTypes.TEXT,
-        allowNull: false
-    },
-}, {
-    timestamps: true // Automatically add createdAt and updatedAt fields
-});
+    requirement_id: { type: DataTypes.STRING, primaryKey: true },
+    criterion_id: { type: DataTypes.STRING, primaryKey: true },
+    mode: { type: DataTypes.STRING, primaryKey: true, defaultValue: 'advice' }, // modeを追加して主キーに含める
+    advice_text: { type: DataTypes.TEXT, allowNull: false },
+}, { timestamps: true });
 
 const EvaluationSet = sequelize.define('EvaluationSet', {
-    evaluationSetId: {
-        type: DataTypes.UUID, // Using UUID for unique IDs
-        defaultValue: DataTypes.UUIDV4,
-        primaryKey: true,
-    },
-    name: {
-        type: DataTypes.STRING,
-        allowNull: false,
-    },
-    description: {
-        type: DataTypes.TEXT,
-        allowNull: true,
-    },
-    starLevel: { // 評価基準レベルを追加 (3 or 4)
-        type: DataTypes.INTEGER,
-        defaultValue: 3,
-        allowNull: false,
-    },
-    isTemplate: { // 組織内テンプレートフラグを追加
-        type: DataTypes.BOOLEAN,
-        defaultValue: false,
-        allowNull: false,
-    },
-    status: {
-        type: DataTypes.STRING,
-        defaultValue: 'active', // e.g., 'active', 'completed'
-        allowNull: false,
-    },
-    firebaseUid: { // Link to the user who owns this evaluation set
-        type: DataTypes.STRING,
-        allowNull: false,
-    },
-}, {
-    timestamps: true,
-});
+    evaluationSetId: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    name: { type: DataTypes.STRING, allowNull: false },
+    description: { type: DataTypes.TEXT, allowNull: true },
+    starLevel: { type: DataTypes.INTEGER, defaultValue: 3, allowNull: false },
+    isTemplate: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
+    status: { type: DataTypes.STRING, defaultValue: 'active', allowNull: false },
+    firebaseUid: { type: DataTypes.STRING, allowNull: false },
+}, { timestamps: true });
 
 const ActionItem = sequelize.define('ActionItem', {
-    actionItemId: {
-        type: DataTypes.UUID,
-        defaultValue: DataTypes.UUIDV4,
-        primaryKey: true,
+    actionItemId: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    evaluationSetId: { 
+        type: DataTypes.UUID, 
+        allowNull: false, 
+        references: { model: 'EvaluationSets', key: 'evaluationSetId' } 
     },
-    evaluationSetId: {
-        type: DataTypes.UUID,
-        allowNull: false,
-        references: {
-            model: 'EvaluationSets',
-            key: 'evaluationSetId',
-        }
-    },
-    requirement_id: {
-        type: DataTypes.STRING,
-        allowNull: false,
-    },
-    criterion_id: {
-        type: DataTypes.STRING,
-        allowNull: false,
-    },
-    taskDescription: {
-        type: DataTypes.TEXT,
-        allowNull: false,
-    },
-    assignee: {
-        type: DataTypes.STRING,
-        allowNull: true,
-    },
-    dueDate: {
-        type: DataTypes.DATE,
-        allowNull: true,
-    },
-    status: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        defaultValue: '未着手', // e.g., '未着手', '進行中', '完了'
-    },
-}, {
-    timestamps: true,
-});
+    requirement_id: { type: DataTypes.STRING, allowNull: false },
+    criterion_id: { type: DataTypes.STRING, allowNull: false },
+    taskDescription: { type: DataTypes.TEXT, allowNull: false },
+    assignee: { type: DataTypes.STRING, allowNull: true },
+    dueDate: { type: DataTypes.DATE, allowNull: true },
+    status: { type: DataTypes.STRING, allowNull: false, defaultValue: '未着手' },
+}, { timestamps: true });
 
 // Associations
 Organization.hasMany(User, { foreignKey: 'organizationId' });
 User.belongsTo(Organization, { foreignKey: 'organizationId' });
-
 EvaluationSet.hasMany(Answer, { foreignKey: 'evaluationSetId', onDelete: 'CASCADE' });
 Answer.belongsTo(EvaluationSet, { foreignKey: 'evaluationSetId' });
-
 EvaluationSet.hasMany(AIAdvice, { foreignKey: 'evaluationSetId', onDelete: 'CASCADE' });
 AIAdvice.belongsTo(EvaluationSet, { foreignKey: 'evaluationSetId' });
-
 EvaluationSet.hasMany(ActionItem, { foreignKey: 'evaluationSetId', onDelete: 'CASCADE' });
 ActionItem.belongsTo(EvaluationSet, { foreignKey: 'evaluationSetId' });
-
 User.hasMany(EvaluationSet, { foreignKey: 'firebaseUid', onDelete: 'CASCADE' });
 EvaluationSet.belongsTo(User, { foreignKey: 'firebaseUid' });
 
-// 複合外部キーを持つ関連付けを定義
-Criterion.hasMany(ActionItem, {
-    foreignKey: ['requirement_id', 'criterion_id'],
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
-});
-ActionItem.belongsTo(Criterion, {
-    foreignKey: ['requirement_id', 'criterion_id'],
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
-});
-
-// Answer と Criterion の関連付け
-Answer.belongsTo(Criterion, {
-    foreignKey: ['requirement_id', 'criterion_id'],
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
-});
-Criterion.hasMany(Answer, {
-    foreignKey: ['requirement_id', 'criterion_id'],
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
-});
-
-// AIAdvice と Criterion の関連付け
-AIAdvice.belongsTo(Criterion, {
-    foreignKey: ['requirement_id', 'criterion_id'],
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
-});
-Criterion.hasMany(AIAdvice, {
-    foreignKey: ['requirement_id', 'criterion_id'],
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE'
-});
-
-
-
+Criterion.hasMany(ActionItem, { foreignKey: ['requirement_id', 'criterion_id'], onDelete: 'CASCADE', onUpdate: 'CASCADE' });
+ActionItem.belongsTo(Criterion, { foreignKey: ['requirement_id', 'criterion_id'], onDelete: 'CASCADE', onUpdate: 'CASCADE' });
+Answer.belongsTo(Criterion, { foreignKey: ['requirement_id', 'criterion_id'], onDelete: 'CASCADE', onUpdate: 'CASCADE' });
+Criterion.hasMany(Answer, { foreignKey: ['requirement_id', 'criterion_id'], onDelete: 'CASCADE', onUpdate: 'CASCADE' });
+AIAdvice.belongsTo(Criterion, { foreignKey: ['requirement_id', 'criterion_id'], onDelete: 'CASCADE', onUpdate: 'CASCADE' });
+Criterion.hasMany(AIAdvice, { foreignKey: ['requirement_id', 'criterion_id'], onDelete: 'CASCADE', onUpdate: 'CASCADE' });
 
 // --- Handlebars Helpers ---
 handlebars.registerHelper('formatDate', function(dateString) {
     if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return new Date(dateString).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 });
 
 handlebars.registerHelper('getDynamicId', function(requirement, starFilter) {
     if (!requirement || !requirement.criteria) return requirement.id;
-
     const filter = parseInt(starFilter, 10);
-
     if (filter === 3) {
         const crit3 = requirement.criteria.find(c => c.level3_no);
         if (crit3 && crit3.level3_no) return crit3.level3_no;
     }
-    
     const crit4 = requirement.criteria.find(c => c.Level4_no);
     if (crit4 && crit4.Level4_no) return crit4.Level4_no;
-
     return requirement.id;
 });
 
 handlebars.registerHelper('markdownToHtml', function(markdownText) {
     if (!markdownText) return '';
-    // markedInstanceがロードされていることを前提とする
-    return new handlebars.SafeString(markedInstance(markdownText));
+    return new handlebars.SafeString(markedInstance ? markedInstance(markdownText) : markdownText);
 });
-
 
 // AI Advice function using Google Gemini API
 async function getAIAdvice(prompt) {
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-    if (!GEMINI_API_KEY) {
-        throw new Error("GEMINI_API_KEY is not set in .env");
-    }
-
-//    const MODEL_NAME = "models/gemini-pro-latest";
+    if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set in .env");
     const MODEL_NAME = process.env.GEMINI_MODEL_NAME || "models/gemini-2.5-flash";
     const API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
-
-
-
     try {
         const response = await fetch(API_ENDPOINT, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                contents: [
-                    {
-                        role: "user",
-                        parts: [{ text: prompt }]
-                    }
-                ],
-                generationConfig: {
-                    temperature: 0.7,
-                    maxOutputTokens: 8192,
-                },
+                contents: [{ role: "user", parts: [{ text: prompt }] }],
+                generationConfig: { temperature: 0.7, maxOutputTokens: 8192 },
                 safetySettings: [
                     { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
                     { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -414,42 +248,23 @@ async function getAIAdvice(prompt) {
                 ],
             }),
         });
-
         if (!response.ok) {
-            if (response.status === 503) {
-                throw new Error('SERVICE_UNAVAILABLE');
-            }
+            if (response.status === 503) throw new Error('SERVICE_UNAVAILABLE');
             const errorText = await response.text();
-            console.error("DEBUG: Raw API Error Response Text:", errorText);
             throw new Error(`Gemini API responded with status ${response.status}: ${errorText}`);
         }
-
         const data = await response.json();
-
         if (data.candidates && data.candidates.length > 0) {
             const candidate = data.candidates[0];
-            if (candidate.finishReason === 'MAX_TOKENS') {
-                throw new Error('MAX_TOKENS');
-            }
-            if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0 && candidate.content.parts[0].text) {
-                return candidate.content.parts[0].text;
-            }
+            if (candidate.finishReason === 'MAX_TOKENS') throw new Error('MAX_TOKENS');
+            if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) return candidate.content.parts[0].text;
         }
-        
-        // If no valid text is found for other reasons (e.g., safety block without MAX_TOKENS)
-        console.warn("Gemini API returned a 200 OK response but with no valid content. Full response:", JSON.stringify(data, null, 2));
         return '';
-
-    } catch (error) {
-        // Re-throw specific errors or a generic one for other network issues
-        throw error;
-    }
+    } catch (error) { throw error; }
 }
 
-
-// --- Helper Functions ---
 function generateInviteCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 読み間違いを防ぐため I, O, 0, 1 を除外
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let code = '';
     for (let i = 0; i < 9; i++) {
         if (i > 0 && i % 3 === 0) code += '-';
@@ -459,650 +274,252 @@ function generateInviteCode() {
 }
 
 // --- API Endpoints ---
+app.get('/api/health', (req, res) => res.json({ status: 'ok', message: 'Server is healthy' }));
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Server is healthy' });
-});
-
-// Create a new organization
 app.post('/api/organizations', async (req, res) => {
     try {
         const { name, ownerUid } = req.body;
-        if (!name || !ownerUid) {
-            return res.status(400).json({ error: 'Missing required fields: name, ownerUid' });
-        }
-
-        const inviteCode = generateInviteCode();
-        const organization = await Organization.create({
-            name,
-            inviteCode,
-            ownerUid
-        });
-
-        // 作成者を管理者として組織に紐付け
-        await User.update(
-            { organizationId: organization.id, role: 'admin' },
-            { where: { firebaseUid: ownerUid } }
-        );
-
+        if (!name || !ownerUid) return res.status(400).json({ error: 'Missing required fields' });
+        const organization = await Organization.create({ name, inviteCode: generateInviteCode(), ownerUid });
+        await User.update({ organizationId: organization.id, role: 'admin' }, { where: { firebaseUid: ownerUid } });
         res.status(201).json(organization);
-    } catch (error) {
-        console.error('Error creating organization:', error);
-        res.status(500).json({ error: 'Failed to create organization' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Join an organization via invite code
 app.post('/api/organizations/join', async (req, res) => {
     try {
         const { inviteCode, firebaseUid } = req.body;
-        if (!inviteCode || !firebaseUid) {
-            return res.status(400).json({ error: 'Missing required fields: inviteCode, firebaseUid' });
-        }
-
-        const organization = await Organization.findOne({
-            where: { inviteCode: inviteCode.toUpperCase() }
-        });
-
-        if (!organization) {
-            return res.status(404).json({ error: '無効な招待コードです。' });
-        }
-
-        // ユーザーを組織に紐付け
-        await User.update(
-            { organizationId: organization.id, role: 'user' },
-            { where: { firebaseUid } }
-        );
-
-        res.json({ message: '組織に参加しました。', organization });
-    } catch (error) {
-        console.error('Error joining organization:', error);
-        res.status(500).json({ error: 'Failed to join organization' });
-    }
+        const organization = await Organization.findOne({ where: { inviteCode: inviteCode.toUpperCase() } });
+        if (!organization) return res.status(404).json({ error: '無効' });
+        await User.update({ organizationId: organization.id, role: 'user' }, { where: { firebaseUid } });
+        res.json({ message: '参加', organization });
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Get organization details
 app.get('/api/organizations/:id', async (req, res) => {
     try {
-        const { id } = req.params;
-        const organization = await Organization.findByPk(id, {
-            include: [{ model: User, attributes: ['firebaseUid', 'email', 'companyName', 'role'] }]
-        });
-        if (!organization) {
-            return res.status(404).json({ error: 'Organization not found' });
-        }
+        const organization = await Organization.findByPk(req.params.id, { include: [{ model: User, attributes: ['firebaseUid', 'email', 'companyName', 'role'] }] });
+        if (!organization) return res.status(404).json({ error: 'Not found' });
         res.json(organization);
-    } catch (error) {
-        console.error('Error fetching organization:', error);
-        res.status(500).json({ error: 'Failed to fetch organization' });
-    }
-});
-
-// Remove a member from organization
-app.delete('/api/organizations/members/:memberUid', async (req, res) => {
-    try {
-        const { memberUid } = req.params;
-        const { adminUid } = req.body; // リクエストした管理者のUID
-
-        const requestingUser = await User.findByPk(adminUid);
-        if (!requestingUser || requestingUser.role !== 'admin') {
-            return res.status(403).json({ error: '管理者権限が必要です。' });
-        }
-
-        const organization = await Organization.findByPk(requestingUser.organizationId);
-        if (!organization || organization.ownerUid !== adminUid) {
-            // 組織のオーナー（作成者）のみがメンバーを削除できるようにする（より厳格な制限）
-            return res.status(403).json({ error: '組織のオーナーのみがメンバーを削除できます。' });
-        }
-
-        if (memberUid === adminUid) {
-            return res.status(400).json({ error: '自分自身を組織から削除することはできません。' });
-        }
-
-        await User.update(
-            { organizationId: null, role: 'user' },
-            { where: { firebaseUid: memberUid, organizationId: organization.id } }
-        );
-
-        res.json({ message: 'メンバーを組織から除外しました。' });
-    } catch (error) {
-        console.error('Error removing member:', error);
-        res.status(500).json({ error: 'Failed to remove member' });
-    }
-});
-
-// Update a member's role within an organization
-app.put('/api/organizations/members/:memberUid/role', async (req, res) => {
-    try {
-        const { memberUid } = req.params;
-        const { adminUid, newRole } = req.body;
-
-        if (!['admin', 'user'].includes(newRole)) {
-            return res.status(400).json({ error: '無効な権限です。' });
-        }
-
-        const requestingUser = await User.findByPk(adminUid);
-        if (!requestingUser || requestingUser.role !== 'admin') {
-            return res.status(403).json({ error: '管理者権限が必要です。' });
-        }
-
-        const organization = await Organization.findByPk(requestingUser.organizationId);
-        if (!organization || organization.ownerUid !== adminUid) {
-            return res.status(403).json({ error: '組織のオーナーのみが権限を変更できます。' });
-        }
-
-        await User.update(
-            { role: newRole },
-            { where: { firebaseUid: memberUid, organizationId: organization.id } }
-        );
-
-        res.json({ message: '権限を更新しました。' });
-    } catch (error) {
-        console.error('Error updating member role:', error);
-        res.status(500).json({ error: 'Failed to update role' });
-    }
-});
-
-// 新しいエンドポイントを追加
-app.get('/api/gemini/models', async (req, res) => {
-    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-    if (!GEMINI_API_KEY) {
-        return res.status(500).json({ error: "GEMINI_API_KEY is not set in .env" });
-    }
-
-    try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`);
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`Gemini ListModels API responded with status ${response.status}: ${JSON.stringify(errorData)}`);
-        }
-        const data = await response.json();
-        res.json(data);
-    } catch (error) {
-        console.error("Error calling Gemini ListModels API:", error);
-        res.status(500).json({ error: `Failed to fetch Gemini models: ${error.message}` });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
 app.get('/api/criteria', async (req, res) => {
   try {
-    const criteria = await Criterion.findAll({
-        order: [['criterion_id', 'ASC']]
-    });
+    const criteria = await Criterion.findAll({ order: [['criterion_id', 'ASC']] });
     res.json(criteria);
-  } catch (error) {
-    console.error('Error fetching criteria:', error);
-    res.status(500).json({ error: 'Failed to fetch criteria' });
-  }
+  } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
-
-
 
 app.post('/api/users', async (req, res) => {
     try {
         const { firebaseUid, email, companyName, role, companyId, organizationId } = req.body;
-        // 必須チェック: emailはゲストの場合ない可能性があるのでチェックしない
-        if (!firebaseUid) {
-            return res.status(400).json({ error: 'Missing required fields: firebaseUid' });
-        }
-
-        // ゲストログイン時、空文字("")が送られてくる場合があるため、nullに変換する
-        // これにより、Unique制約(重複チェック)でエラーになるのを防ぐ
-        const emailToSave = email || null;
-
-        const [user, created] = await User.findOrCreate({
-            where: { firebaseUid },
-            defaults: { 
-                email: emailToSave, 
-                companyName,
-                role: role || 'user',
-                companyId,
-                organizationId: organizationId || null,
-                orgStatus: 'approved'
-            }
-        });
-
-        // 既存ユーザーの更新処理
+        const [user, created] = await User.findOrCreate({ where: { firebaseUid }, defaults: { email: email || null, companyName, role: role || 'user', companyId, organizationId: organizationId || null, orgStatus: 'approved' } });
         if (!created) {
-            // メールアドレスが未設定（null）だったり、変更があった場合に更新
-            if (emailToSave && user.email !== emailToSave) {
-                user.email = emailToSave;
-            }
-            // 表示名を更新
-            if (companyName !== undefined) {
-                user.companyName = companyName;
-            }
-            // 権限（role）の更新を許可する
-            if (role) {
-                user.role = role;
-            }
-            // 新しい組織ID（招待コード方式）の紐付け
-            if (organizationId !== undefined) {
-                user.organizationId = organizationId;
-            }
-            // 互換性のため古いcompanyIdも維持
-            if (companyId !== undefined) {
-                user.companyId = companyId;
-            }
+            if (email && user.email !== email) user.email = email;
+            if (companyName !== undefined) user.companyName = companyName;
+            if (role) user.role = role;
+            if (organizationId !== undefined) user.organizationId = organizationId;
             await user.save();
         }
         res.status(created ? 201 : 200).json(user);
-    } catch (error) {
-        console.error('Error in /api/users endpoint:', error);
-        res.status(500).json({ error: 'Failed to process user' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// DELETE endpoint for user and associated data
 app.delete('/api/users/:firebaseUid', async (req, res) => {
     const { firebaseUid } = req.params;
-    
-    // --- Security Check ---
-    const idToken = req.headers.authorization?.split('Bearer ')[1];
-    if (!idToken) {
-        return res.status(401).json({ error: 'Unauthorized: No ID token provided.' });
-    }
-    try {
-        const decodedToken = await admin.auth().verifyIdToken(idToken);
-        if (decodedToken.uid !== firebaseUid) {
-            return res.status(403).json({ error: 'Forbidden: You can only delete your own account.' });
-        }
-    } catch (error) {
-        console.error('Error verifying Firebase ID token:', error);
-        return res.status(401).json({ error: 'Unauthorized: Invalid ID token.' });
-    }
-    // --- End Security Check ---
-
     const transaction = await sequelize.transaction();
-
     try {
-        // Find the user in our database to ensure they exist.
-        const user = await User.findOne({
-            where: { firebaseUid: firebaseUid },
-            transaction
-        });
-
-        // If the user exists in our database, delete their associated data first.
+        const user = await User.findOne({ where: { firebaseUid }, transaction });
         if (user) {
-            // Explicitly delete all evaluation sets associated with the user.
-            // The cascade from EvaluationSet to its children (Answers, ActionItems, etc.) will be triggered.
-            await EvaluationSet.destroy({
-                where: { firebaseUid: user.firebaseUid },
-                transaction
-            });
-            console.log(`Explicitly deleted EvaluationSets for user ${firebaseUid}.`);
-
-            // Now, delete the user record itself.
+            await EvaluationSet.destroy({ where: { firebaseUid: user.firebaseUid }, transaction });
             await user.destroy({ transaction });
-            console.log(`Successfully deleted user ${firebaseUid} from the database.`);
-        } else {
-            console.warn(`User with firebaseUid ${firebaseUid} was not found in the database, but proceeding with Firebase Auth deletion.`);
         }
-
-        // After successfully handling our database, delete the user from Firebase Authentication.
         await admin.auth().deleteUser(firebaseUid);
-        console.log(`Successfully deleted user ${firebaseUid} from Firebase Authentication.`);
-        
-        // If all operations were successful, commit the transaction.
         await transaction.commit();
-
-        res.status(200).json({ message: 'User account and all associated data deleted successfully.' });
-
-    } catch (error) {
-        // If any error occurred, roll back the transaction.
-        await transaction.rollback();
-
-        console.error(`Critical error during deletion for user ${firebaseUid}:`, error);
-        if (error.code === 'auth/user-not-found') {
-            return res.status(404).json({ error: 'User not found in Firebase Authentication.' });
-        }
-        res.status(500).json({ error: 'A server error occurred during the account deletion process.' });
-    }
+        res.status(200).json({ message: 'Success' });
+    } catch (error) { await transaction.rollback(); res.status(500).json({ error: 'Failed' }); }
 });
 
-// Get all evaluation sets for a user
 app.get('/api/evaluationsets/:firebaseUid', async (req, res) => {
     try {
-        const { firebaseUid } = req.params;
-        
-        // --- 簡易連携ロジック ---
-        // 1. リクエストを送ってきたユーザーの情報を取得
-        const requestingUser = await User.findByPk(firebaseUid);
-        
-        let whereClause = { firebaseUid };
-
-        // 2. 管理者の場合、同じ組織(organizationId)の全評価セットを表示可能にする
+        const requestingUser = await User.findByPk(req.params.firebaseUid);
+        let whereClause = { firebaseUid: req.params.firebaseUid };
         if (requestingUser && requestingUser.role === 'admin' && requestingUser.organizationId) {
-            // 同じorganizationIdを持つ全ユーザーのUIDを取得
-            const colleagueUids = await User.findAll({
-                attributes: ['firebaseUid'],
-                where: { organizationId: requestingUser.organizationId },
-                raw: true
-            }).then(users => users.map(u => u.firebaseUid));
-
-            whereClause = {
-                firebaseUid: {
-                    [Op.in]: colleagueUids
-                }
-            };
+            const colleagueUids = await User.findAll({ attributes: ['firebaseUid'], where: { organizationId: requestingUser.organizationId }, raw: true }).then(users => users.map(u => u.firebaseUid));
+            whereClause = { firebaseUid: { [Op.in]: colleagueUids } };
         }
 
-        const evaluationSets = await EvaluationSet.findAll({
-            where: whereClause,
-            order: [['createdAt', 'DESC']],
-            include: [{ model: User, attributes: ['email', 'companyName'] }] // 誰のセットか分かるようにユーザー情報を追加
+        // 評価セット一覧を取得
+        const evaluationSets = await EvaluationSet.findAll({ 
+            where: whereClause, 
+            order: [['createdAt', 'DESC']], 
+            include: [{ model: User, attributes: ['email', 'companyName'] }] 
         });
-        res.json(evaluationSets);
-    } catch (error) {
-        console.error('Error fetching evaluation sets:', error);
-        res.status(500).json({ error: 'Failed to fetch evaluation sets' });
+
+        // 全項目数を取得（★3と★4それぞれ）
+        const totalCriteria3 = await Criterion.count({ where: { star_level: { [Op.lte]: 3 } } });
+        const totalCriteria4 = await Criterion.count({ where: { star_level: { [Op.lte]: 4 } } });
+
+        // 各セットの進捗率を計算
+        const setsWithProgress = await Promise.all(evaluationSets.map(async (set) => {
+            const totalCount = set.starLevel === 4 ? totalCriteria4 : totalCriteria3;
+            const answeredCount = await Answer.count({
+                where: {
+                    evaluationSetId: set.evaluationSetId,
+                    status: { [Op.ne]: '未評価' }
+                }
+            });
+            const progressRate = totalCount > 0 ? Math.round((answeredCount / totalCount) * 100) : 0;
+            
+            const rawSet = set.toJSON();
+            return { ...rawSet, progressRate };
+        }));
+
+        res.json(setsWithProgress);
+    } catch (error) { 
+        console.error('Error fetching evaluation sets with progress:', error);
+        res.status(500).json({ error: 'Failed' }); 
     }
 });
 
-// Get a single evaluation set by ID
 app.get('/api/evaluationset/:id', async (req, res) => {
     try {
-        const { id } = req.params;
-        const evaluationSet = await EvaluationSet.findByPk(id, {
-            include: [{ model: User, attributes: ['email', 'companyName', 'companyId'] }]
-        });
-        if (!evaluationSet) {
-            return res.status(404).json({ error: 'EvaluationSet not found' });
-        }
+        const evaluationSet = await EvaluationSet.findByPk(req.params.id, { include: [{ model: User, attributes: ['email', 'companyName', 'companyId'] }] });
+        if (!evaluationSet) return res.status(404).json({ error: 'Not found' });
         res.json(evaluationSet);
-    } catch (error) {
-        console.error('Error fetching evaluation set:', error);
-        res.status(500).json({ error: 'Failed to fetch evaluation set' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Create a new evaluation set
 app.post('/api/evaluationsets', async (req, res) => {
     try {
         const { firebaseUid, name, description, starLevel } = req.body;
-        if (!firebaseUid || !name) {
-            return res.status(400).json({ error: 'Missing required fields: firebaseUid, name' });
-        }
-
-        // Check for duplicate name for the same user
-        const existingSet = await EvaluationSet.findOne({
-            where: {
-                firebaseUid: firebaseUid,
-                name: name
-            }
-        });
-
-        if (existingSet) {
-            return res.status(409).json({ error: '同名の評価セットは既に存在します。別の名前を指定してください。' });
-        }
-
-        const evaluationSet = await EvaluationSet.create({ 
-            firebaseUid, 
-            name, 
-            description, 
-            starLevel: starLevel || 3 
-        });
+        const existingSet = await EvaluationSet.findOne({ where: { firebaseUid, name } });
+        if (existingSet) return res.status(409).json({ error: '同名存在' });
+        const evaluationSet = await EvaluationSet.create({ firebaseUid, name, description, starLevel: starLevel || 3 });
         res.status(201).json(evaluationSet);
-    } catch (error) {
-        console.error('Error creating evaluation set:', error);
-        res.status(500).json({ error: 'Failed to create evaluation set' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Update an evaluation set
 app.put('/api/evaluationsets/:id', async (req, res) => {
     try {
-        const { id } = req.params;
         const { name, description, status, starLevel } = req.body;
-        const evaluationSet = await EvaluationSet.findByPk(id);
-        if (!evaluationSet) {
-            return res.status(404).json({ error: 'EvaluationSet not found' });
-        }
-        // Add authorization check here if needed, e.g., check if user owns this set
+        const evaluationSet = await EvaluationSet.findByPk(req.params.id);
+        if (!evaluationSet) return res.status(404).json({ error: 'Not found' });
         evaluationSet.name = name ?? evaluationSet.name;
         evaluationSet.description = description ?? evaluationSet.description;
         evaluationSet.status = status ?? evaluationSet.status;
-        evaluationSet.starLevel = starLevel ?? evaluationSet.starLevel; // 追加
+        evaluationSet.starLevel = starLevel ?? evaluationSet.starLevel;
         await evaluationSet.save();
         res.json(evaluationSet);
-    } catch (error) {
-        console.error('Error updating evaluation set:', error);
-        res.status(500).json({ error: 'Failed to update evaluation set' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
-
-// Toggle template status
-app.put('/api/evaluationsets/:id/template', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { firebaseUid, isTemplate } = req.body;
-
-        const evaluationSet = await EvaluationSet.findByPk(id);
-        if (!evaluationSet) return res.status(404).json({ error: 'Evaluation set not found' });
-        
-        // オーナーチェック
-        if (evaluationSet.firebaseUid !== firebaseUid) {
-            return res.status(403).json({ error: 'オーナーのみがテンプレート設定を変更できます。' });
-        }
-
-        evaluationSet.isTemplate = isTemplate;
-        await evaluationSet.save();
-        res.json(evaluationSet);
-    } catch (error) {
-        console.error('Error toggling template:', error);
-        res.status(500).json({ error: 'Failed to update template status' });
-    }
-});
-
-// Get organization templates
-app.get('/api/organizations/:organizationId/templates', async (req, res) => {
-    try {
-        const { organizationId } = req.params;
-        const templates = await EvaluationSet.findAll({
-            where: { isTemplate: true },
-            include: [{
-                model: User,
-                where: { organizationId },
-                attributes: ['companyName', 'email']
-            }],
-            order: [['updatedAt', 'DESC']]
-        });
-        res.json(templates);
-    } catch (error) {
-        console.error('Error fetching templates:', error);
-        res.status(500).json({ error: 'Failed to fetch templates' });
-    }
-});
-
-// Copy evaluation set (Template to New Set)
-app.post('/api/evaluationsets/copy', async (req, res) => {
-    const transaction = await sequelize.transaction();
-    try {
-        const { templateSetId, firebaseUid, name, description } = req.body;
-
-        // 1. テンプレートの情報を取得
-        const templateSet = await EvaluationSet.findByPk(templateSetId);
-        if (!templateSet) throw new Error('Template not found');
-
-        // 2. 新しい評価セットを作成
-        const newSet = await EvaluationSet.create({
-            firebaseUid,
-            name,
-            description,
-            starLevel: templateSet.starLevel, // 基準レベルもコピー
-            isTemplate: false,
-            status: 'active'
-        }, { transaction });
-
-        // 3. 回答をコピー
-        const answers = await Answer.findAll({ where: { evaluationSetId: templateSetId } });
-        const newAnswers = answers.map(a => ({
-            evaluationSetId: newSet.evaluationSetId,
-            requirement_id: a.requirement_id,
-            criterion_id: a.criterion_id,
-            status: a.status,
-            notes: a.notes
-        }));
-
-        if (newAnswers.length > 0) {
-            await Answer.bulkCreate(newAnswers, { transaction });
-        }
-
-        await transaction.commit();
-        res.status(201).json(newSet);
-    } catch (error) {
-        await transaction.rollback();
-        console.error('Error copying evaluation set:', error);
-        res.status(500).json({ error: 'Failed to copy template' });
-    }
-});
-
-// Delete an evaluation set
-app.delete('/api/evaluationsets/:evaluationSetId', async (req, res) => {
-    try {
-        const { evaluationSetId } = req.params;
-        // Assuming firebaseUid is passed in headers or body for authorization
-        // For simplicity, we'll assume the user is authenticated and their UID is available
-        // In a real app, you'd get firebaseUid from a JWT or session
-        const { firebaseUid } = req.body; // Or from a middleware that extracts it from auth token
-
-        if (!firebaseUid) {
-            return res.status(401).json({ error: 'Unauthorized: firebaseUid missing for authorization.' });
-        }
-
-        const evaluationSet = await EvaluationSet.findByPk(evaluationSetId);
-
-        if (!evaluationSet) {
-            return res.status(404).json({ error: 'EvaluationSet not found.' });
-        }
-
-        // Authorization check: ensure the user owns this evaluation set
-        if (evaluationSet.firebaseUid !== firebaseUid) {
-            return res.status(403).json({ error: 'Forbidden: You do not own this evaluation set.' });
-        }
-
-        await evaluationSet.destroy(); // onDelete: 'CASCADE' will handle Answers and AIAdvice
-
-        res.status(204).send(); // No content to send back, just success
-    } catch (error) {
-        console.error('Error deleting evaluation set:', error);
-        res.status(500).json({ error: 'Failed to delete evaluation set.' });
-    }
-});
-
 
 app.post('/api/answers', async (req, res) => {
     try {
         const { evaluationSetId, requirement_id, criterion_id, status, notes } = req.body;
-        if (!evaluationSetId || !requirement_id || !criterion_id || !status) {
-            return res.status(400).json({ error: 'Missing required fields' });
-        }
-
-        const [answer, created] = await Answer.findOrCreate({
-            where: { evaluationSetId, requirement_id, criterion_id },
-            defaults: { status, notes }
-        });
-
+        const [answer, created] = await Answer.findOrCreate({ where: { evaluationSetId, requirement_id, criterion_id }, defaults: { status, notes } });
         if (!created) {
             answer.status = status;
             answer.notes = notes;
             await answer.save();
         }
         res.status(created ? 201 : 200).json(answer);
-    } catch (error) {
-        console.error('Error saving answer:', error);
-        res.status(500).json({ error: 'Failed to save answer' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
 app.get('/api/answers/:evaluationSetId', async (req, res) => {
     try {
-        const { evaluationSetId } = req.params;
-        
-        const answers = await Answer.findAll({
-            where: { evaluationSetId },
-            order: [['requirement_id', 'ASC'], ['criterion_id', 'ASC']],
-            raw: true
-        });
-
-        const advices = await AIAdvice.findAll({
-            where: { evaluationSetId },
-            raw: true
-        });
-
+        const answers = await Answer.findAll({ where: { evaluationSetId: req.params.evaluationSetId }, order: [['requirement_id', 'ASC'], ['criterion_id', 'ASC']], raw: true });
+        const advices = await AIAdvice.findAll({ where: { evaluationSetId: req.params.evaluationSetId }, raw: true });
+        // modeを含めたマップを作成
         const adviceMap = new Map();
-        advices.forEach(advice => {
-            const key = `${advice.evaluationSetId}-${advice.requirement_id}-${advice.criterion_id}`;
-            adviceMap.set(key, advice);
+        advices.forEach(a => {
+            adviceMap.set(`${a.evaluationSetId}-${a.requirement_id}-${a.criterion_id}-${a.mode}`, a);
         });
-
+        
         const combinedData = answers.map(answer => {
-            const key = `${answer.evaluationSetId}-${answer.requirement_id}-${answer.criterion_id}`;
-            return {
-                ...answer,
-                advice: adviceMap.get(key) || null
+            const keyBase = `${answer.evaluationSetId}-${answer.requirement_id}-${answer.criterion_id}`;
+            return { 
+                ...answer, 
+                ai_judgment: adviceMap.get(`${keyBase}-judge`) || null,
+                ai_advice: adviceMap.get(`${keyBase}-advice`) || null
             };
         });
-
         res.json(combinedData);
-    } catch (error) {
-        console.error('Error fetching answers:', error);
-        res.status(500).json({ error: 'Failed to fetch answers' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
 app.post('/api/ai/advice', async (req, res) => {
-    const { evaluationSetId, requirement_id, criterion_id, requirementText, criterionText, notes } = req.body;
+    const { evaluationSetId, requirement_id, criterion_id, requirementText, criterionText, notes, mode } = req.body;
+    if (!evaluationSetId || !requirement_id || !criterion_id || !requirementText || !criterionText) return res.status(400).json({ error: 'Missing required fields' });
+    
+    // データベースから参照文献情報を取得
+    const criterionData = await Criterion.findOne({ where: { requirement_id, criterion_id } });
 
-    if (!evaluationSetId || !requirement_id || !criterion_id || !requirementText || !criterionText) {
-        return res.status(400).json({ error: 'Missing required fields for generating advice.' });
-    }
+    await Answer.findOrCreate({ where: { evaluationSetId, requirement_id, criterion_id }, defaults: { status: '未評価', notes: notes || '' } });
 
-    // Ensure the parent Answer record exists
-    await Answer.findOrCreate({
-        where: { evaluationSetId, requirement_id, criterion_id },
-        defaults: { status: '未評価', notes: notes || '' }
-    });
-
-    // Helper function to generate the prompt
     const buildPrompt = (includeNotes) => {
-        const promptCore = [
-            'あなたはITセキュリティを専門とするコンサルタントです。',
-            '組織の担当者にも分かりやすいように、以下のセキュリティ要件を達成するための具体的な改善計画を提案してください。',
-            '',
-            '# セキュリティ要求事項',
-            requirementText,
-            '',
-            '# 未達成の評価基準',
-            criterionText,
-        ];
-        if (includeNotes && notes) {
-            promptCore.push('', '# ユーザーによる補足情報（備考）', notes);
+        let promptCore = [];
+        if (mode === 'judge') {
+            promptCore = [
+                'あなたはITセキュリティの導入を支援するサポーター兼コンサルタントです。',
+                '組織の現状（備考）を基に、以下のセキュリティ評価基準の「達成度」を前向きに判定し、寄り添ったアドバイスをしてください。',
+                '', '# セキュリティ要求事項', requirementText, '', '# 評価基準', criterionText,
+            ];
+            if (includeNotes && notes) promptCore.push('', '# 組織の現状（備考）', notes);
+            else promptCore.push('', '# 組織の現状（備考）', '（現状は未入力です）');
+        } else {
+            promptCore = [
+                'あなたはITセキュリティを専門とするコンサルタントです。',
+                '組織の担当者にも分かりやすいように、以下のセキュリティ要件を達成するための具体的な改善計画を提案してください。',
+                '', '# セキュリティ要求事項', requirementText, '', '# 未達成の評価基準', criterionText,
+            ];
+            if (includeNotes && notes) promptCore.push('', '# ユーザーによる補足情報（備考）', notes);
         }
+
+        // 参照文献情報をプロンプトに追加
+        if (criterionData) {
+            const refs = [];
+            if (criterionData.ref_nist) refs.push(`- NIST CSF: ${criterionData.ref_nist}`);
+            if (criterionData.ref_iso27001) refs.push(`- ISO/IEC 27001:2022: ${criterionData.ref_iso27001}`);
+            if (criterionData.ref_cmmc) refs.push(`- CMMC: ${criterionData.ref_cmmc}`);
+            if (criterionData.ref_gov) refs.push(`- 政府統一基準: ${criterionData.ref_gov}`);
+            if (criterionData.ref_cyber_essentials) refs.push(`- Cyber Essentials: ${criterionData.ref_cyber_essentials}`);
+            if (criterionData.ref_jais) refs.push(`- 自工会/部工会ガイドライン: ${criterionData.ref_jais}`);
+
+            if (refs.length > 0) {
+                promptCore.push('', '# 関連する主要な基準・規格の参照条項', ...refs);
+            }
+        }
+
         const promptInstructions = [
-            '',
-            '# 禁止事項 (最重要)',
-            '- **「中小企業」という単語は絶対に使用しないでください。** 代わりに「組織」や「企業」といった一般的な単語を使用してください。',
-            '- **「〇〇社」のような、架空の企業名や個人名を例として使用しないでください。**',
-            '- **参考情報のURLは記載しないでください。** 代わりに、参考となる文書の正式名称（発行元を含む）を正確に記載してください。',
-            '',
-            '# 指示',
-            '上記の要求事項、評価基準、補足情報を踏まえ、**禁止事項を厳守した上で**、評価基準を「達成」にするための具体的で実行可能なアクションプランを提案してください。',
-            '',
-            '## 回答形式',
-            '- 全体はマークダウン形式で記述してください。',
-            '- アクションプランは、具体的な手順が分かるようにリスト形式で記述してください。',
-            '- **太字にする場合は、必ずアスタリスク2つ（`**`）でテキストを囲んでください。（例： **重要なポイント** のように、アスタリスク2つで囲みます）**',
-            '- 表形式で回答する場合は、必ずMarkdownのテーブル記法に沿って、ヘッダーと区切り線を正しく記述し、レイアウトが崩れないようにしてください。',
-            '',
-            '## 参考情報に関する厳格な指示',
-            '- 参考となる情報源を提示する場合は、以下の条件を必ず満たしてください。',
-            '  - 情報の鮮度: できる限り最新の情報（可能であれば過去2-3年以内に公開・更新されたもの）を優先してください。',
-            '  - 信頼性: リンク切れがなく、信頼性の高い公式な一次情報源（例: 政府機関、NIST、IPA、JPCERT/CC、主要な技術ベンダーの公式ドキュメントなど）のURLを記載してください。',
-            '  - 具体性: IPAのウェブサイトを参照する場合は、トップページではなく、具体的なガイドラインや報告書のページを直接指定してください。',
-            '  - 検証: 提示するURLが現在アクセス可能であることを確認するよう努めてください。もし確実なURLが見つからない場合は、無理にURLを記載せず、代わりに検索キーワードや参照すべき文書名を正確に提示してください。'
+            '', '# 禁止事項 (最重要)', '- **「中小企業」という単語は絶対に使用しないでください。** 代わりに「組織」や「企業」といった一般的な単語を使用してください。', '- **「〇〇社」のような、架空の企業名や個人名を例として使用しないでください。**', '- **参考情報のURLは記載しないでください。** 代わりに、参考となる文書の正式名称（発行元を含む）を正確に記載してください。', '', '# 指示'
         ];
-        return [...promptCore, ...promptInstructions].join('\n');
+
+        if (mode === 'judge') {
+            promptInstructions.push(
+                '1. 組織の現状（備考）が、評価基準の「本質的な意図」を満たしているか、支援的な視点で判定してください。',
+                '2. 判定結果は、冒頭に以下のいずれかを明記してください。',
+                '   - 【達成】：中心的な取り組みが行われており、基準の意図を概ね満たしている場合',
+                '   - 【未達成】：取り組みが全く行われていないか、意図から大きく外れている場合',
+                '   - 【判断には情報不足】：備考が短すぎるなど、判定が困難な場合',
+                '3. 実態として取り組みが行われている場合は前向きに【達成】と判定した上で、「さらに信頼性を高めるためのステップアップ案」をアドバイスとして添えてください。',
+                '4. **【重要：スコープの厳守】**：アドバイスは、提示された「評価基準」の達成に直結する具体的な内容のみに絞ってください。ガバナンス項目（1-3-1-1等）以外では、安易に「基本方針の策定」といった上位レイヤーの一般論を推奨せず、目の前の具体的な対策（例：リストの項目、バックアップの方法等）に集中してください。'
+            );
+        } else {
+            promptInstructions.push(
+                '1. 上記の要求事項、評価基準、補足情報を踏まえ、評価基準を「達成」にするための具体的で実行可能なアクションプランを提案してください。',
+                '2. **【重要：ピンポイントな助言】**：アドバイスのスコープを、提示された「評価基準」だけに厳格に絞ってください。関係のない「基本方針の策定」や「体制の構築」などの一般論を前置きとして含めず、その項目をクリアするために「具体的に何をすべきか（例：どのようなリストを作るか、どのような設定をするか）」を直接回答してください。',
+                '3. **【用語の正確性】**：ISO 27002 やガイドラインを参考にしつつ、1-3-1-1 等の「方針」そのものがテーマである場合を除き、常に実務的な「ルール（規程・手順書）」の具体化に焦点を当ててください。'
+            );
+        }
+
+        const promptFooter = [
+            '', '## 回答形式', '- 全体はマークダウン形式で記述してください。', '- リスト形式で記述してください。', '- **太字にする場合は、必ずアスタリスク2つ（`**`）で囲んでください。', ''
+        ];
+
+        return [...promptCore, ...promptInstructions, ...promptFooter].join('\n');
     };
 
     try {
@@ -1110,18 +527,11 @@ app.post('/api/ai/advice', async (req, res) => {
         const fullPrompt = buildPrompt(true);
         let adviceText = await getAIAdvice(fullPrompt);
 
-        // --- Upsert and respond ---
-        await AIAdvice.upsert({
-            evaluationSetId,
-            requirement_id,
-            criterion_id,
-            advice_text: adviceText
-        });
-        const newAdvice = await AIAdvice.findOne({ where: { evaluationSetId, requirement_id, criterion_id } });
+        await AIAdvice.upsert({ evaluationSetId, requirement_id, criterion_id, mode, advice_text: adviceText });
+        const newAdvice = await AIAdvice.findOne({ where: { evaluationSetId, requirement_id, criterion_id, mode } });
         res.json(newAdvice);
 
     } catch (error) {
-        // --- Handle specific errors from getAIAdvice ---
         if (error.message === 'MAX_TOKENS') {
             console.log('MAX_TOKENS error on first attempt. Retrying without notes...');
             try {
@@ -1129,151 +539,104 @@ app.post('/api/ai/advice', async (req, res) => {
                 const simplePrompt = buildPrompt(false);
                 let adviceText = await getAIAdvice(simplePrompt);
 
-                // Prepend disclaimer
-                const disclaimer = `**[ご注意]** 生成するアドバイスが長くなりすぎたため、備考欄の情報は考慮されていません。
-
----
-
-`;
+                const disclaimer = `**[ご注意]** 生成するアドバイスが長くなりすぎたため、備考欄の情報は考慮されていません。\n\n---\n\n`;
                 adviceText = disclaimer + adviceText;
 
-                await AIAdvice.upsert({
-                    evaluationSetId,
-                    requirement_id,
-                    criterion_id,
-                    advice_text: adviceText
-                });
-                const newAdvice = await AIAdvice.findOne({ where: { evaluationSetId, requirement_id, criterion_id } });
+                await AIAdvice.upsert({ evaluationSetId, requirement_id, criterion_id, mode, advice_text: adviceText });
+                const newAdvice = await AIAdvice.findOne({ where: { evaluationSetId, requirement_id, criterion_id, mode } });
                 return res.json(newAdvice);
-
             } catch (fallbackError) {
                 console.error('Error on fallback attempt:', fallbackError);
-                // If even the fallback fails, send a final error message
-                return res.status(500).json({
-                    error: 'MAX_TOKENS_FALLBACK_FAILED',
-                    message: 'AIが応答を生成できませんでした。要求が複雑すぎる可能性があります。'
-                });
+                return res.status(500).json({ error: 'MAX_TOKENS_FALLBACK_FAILED', message: 'AIが応答を生成できませんでした。要求が複雑すぎる可能性があります。' });
             }
         } else if (error.message === 'SERVICE_UNAVAILABLE') {
-            return res.status(503).json({
-                error: 'SERVICE_UNAVAILABLE',
-                message: 'AIモデルが混み合っています。しばらく時間をおいてから、再度お試しください。'
-            });
+            return res.status(503).json({ error: 'SERVICE_UNAVAILABLE', message: 'AIモデルが混み合っています。しばらく時間をおいてから、再度お試しください。' });
         } else {
-            // Generic error for any other case
             console.error('Error getting AI advice:', error);
-            return res.status(500).json({
-                error: 'INTERNAL_SERVER_ERROR',
-                message: 'AIアドバイスの生成中に不明なエラーが発生しました。'
-            });
+            return res.status(500).json({ error: 'INTERNAL_SERVER_ERROR', message: 'AIアドバイスの生成中に不明なエラーが発生しました。' });
         }
     }
 });
 
-// --- ActionItem API Endpoints ---
+app.post('/api/ai/generate-action-item', async (req, res) => {
+    const { adviceText, criterionId } = req.body;
+    if (!adviceText) return res.status(400).json({ error: 'Advice text is required' });
 
-// Get all action items for an evaluation set
-app.get('/api/actionitems/:evaluationSetId', async (req, res) => {
+    const prompt = `
+以下のセキュリティ改善アドバイスから、実施すべき具体的なアクションを簡潔にまとめた「アクションアイテム名」を1つ作成してください。
+
+# 改善アドバイス
+${adviceText}
+
+# 指示
+- 提示された改善アドバイスの核心（最も重要な実務アクション）を抽出し、「〜を作成する」「〜を整備する」といった具体的な動作で締めくくってください。
+- 1-3-1-1のようなガバナンス項目を除き、「教育」「点検体制の構築」「経営層のコミットメント」といったISMSの一般論や周辺要素は盛り込まず、目の前の評価基準を達成するための直接的な作業内容に絞ってください。
+- 80文字以内の簡潔かつ具体的な内容にしてください。
+- 記号や装飾は含めず、テキストのみを返してください。
+`;
+
     try {
-        const { evaluationSetId } = req.params;
-        const actionItems = await ActionItem.findAll({
-            where: { evaluationSetId },
-            order: [['createdAt', 'ASC']]
-        });
-        res.json(actionItems);
+        const taskDescription = await getAIAdvice(prompt);
+        res.json({ taskDescription: taskDescription.trim().replace(/^[\n\r*-]+|[\n\r*-]+$/g, '') });
     } catch (error) {
-        console.error('Error fetching action items:', error);
-        res.status(500).json({ error: 'Failed to fetch action items' });
+        console.error('Error drafting action item:', error);
+        res.status(500).json({ error: 'Failed to generate task draft' });
     }
 });
 
-// Create a new action item
+app.get('/api/actionitems/:evaluationSetId', async (req, res) => {
+    try {
+        const actionItems = await ActionItem.findAll({ where: { evaluationSetId: req.params.evaluationSetId }, order: [['createdAt', 'ASC']] });
+        res.json(actionItems);
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
+});
+
 app.post('/api/actionitems', async (req, res) => {
     try {
         const { evaluationSetId, requirement_id, criterion_id, taskDescription, assignee, dueDate, status } = req.body;
-        if (!evaluationSetId || !requirement_id || !criterion_id || !taskDescription) {
-            return res.status(400).json({ error: 'Missing required fields: evaluationSetId, requirement_id, criterion_id, taskDescription' });
-        }
         const actionItem = await ActionItem.create({ evaluationSetId, requirement_id, criterion_id, taskDescription, assignee, dueDate, status });
         res.status(201).json(actionItem);
-    } catch (error) {
-        console.error('Error creating action item:', error);
-        res.status(500).json({ error: 'Failed to create action item' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Update an action item
 app.put('/api/actionitems/:actionItemId', async (req, res) => {
     try {
-        const { actionItemId } = req.params;
-        const { taskDescription, assignee, dueDate, status } = req.body;
-        const actionItem = await ActionItem.findByPk(actionItemId);
-        if (!actionItem) {
-            return res.status(404).json({ error: 'ActionItem not found' });
-        }
-        // TODO: Add authorization check if needed
-        actionItem.taskDescription = taskDescription ?? actionItem.taskDescription;
-        actionItem.assignee = assignee ?? actionItem.assignee;
-        actionItem.dueDate = dueDate ?? actionItem.dueDate;
-        actionItem.status = status ?? actionItem.status;
+        const actionItem = await ActionItem.findByPk(req.params.actionItemId);
+        if (!actionItem) return res.status(404).json({ error: 'Not found' });
+        Object.assign(actionItem, req.body);
         await actionItem.save();
         res.json(actionItem);
-    } catch (error) {
-        console.error('Error updating action item:', error);
-        res.status(500).json({ error: 'Failed to update action item' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// Delete an action item
 app.delete('/api/actionitems/:actionItemId', async (req, res) => {
     try {
-        const { actionItemId } = req.params;
-        const actionItem = await ActionItem.findByPk(actionItemId);
-        if (!actionItem) {
-            return res.status(404).json({ error: 'ActionItem not found' });
-        }
-        // TODO: Add authorization check if needed
-        await actionItem.destroy();
+        const actionItem = await ActionItem.findByPk(req.params.actionItemId);
+        if (actionItem) await actionItem.destroy();
         res.status(204).send();
-    } catch (error) {
-        console.error('Error deleting action item:', error);
-        res.status(500).json({ error: 'Failed to delete action item' });
-    }
+    } catch (error) { res.status(500).json({ error: 'Failed' }); }
 });
-
-
-// --- PDF Report Generation ---
 
 // Helper function for escapeHtml
 function escapeHtml(text) {
-    if (text === null || text === undefined) {
-      return '';
-    }
-    return text.toString()
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+    if (text === null || text === undefined) return '';
+    return text.toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
 
-// Helper function to get status colors for PDF
 function getStatusColor(status) {
     switch (status) {
-        case '達成': return '#28a745'; // green
-        case '未達成': return '#dc3545'; // red
-        case '一部達成': return '#ffc107'; // yellow
-        case '該当なし': return '#6c757d'; // gray
-        case '未評価': return '#f8f9fa'; // light gray
-        default: return '#ffffff'; // white
+        case '達成': return '#28a745';
+        case '未達成': return '#dc3545';
+        case '一部達成': return '#ffc107';
+        case '該当なし': return '#6c757d';
+        case '未評価': return '#f8f9fa';
+        default: return '#ffffff';
     }
 }
 
-// Function to generate the report HTML
 function generatePdfHtml(requirements, evaluationSetName, actionItems) {
     let body = '';
 
-    // Helper to safely get Category 1 No
     const getCat1No = (cat1Key) => {
         const cat1Data = requirements[cat1Key];
         if (!cat1Data) return 999;
@@ -1284,77 +647,48 @@ function generatePdfHtml(requirements, evaluationSetName, actionItems) {
         return parseInt(reqs[0].category1_no || '999', 10);
     };
 
-    // Sort category1 keys
-    const sortedCat1Keys = Object.keys(requirements).sort((a, b) => {
-        return getCat1No(a) - getCat1No(b);
-    });
+    const sortedCat1Keys = Object.keys(requirements).sort((a, b) => getCat1No(a) - getCat1No(b));
 
     for (const category1 of sortedCat1Keys) {
         const subCategories = requirements[category1];
-        // Get category1_no safely
         const cat1No = getCat1No(category1);
         const displayCat1No = cat1No === 999 ? '' : `${cat1No}. `;
         
-        body += `<div class="category-group"><h1>${escapeHtml(displayCat1No)}${escapeHtml(category1)}</h1>`;
+        body += `<div class="category-group"><h1>${displayCat1No}${escapeHtml(category1)}</h1>`;
         
-        // Helper to safely get Category 2 No
-        const getCat2No = (cat2Key) => {
-            const reqs = subCategories[cat2Key];
-            if (!reqs || reqs.length === 0) return '999';
-            return reqs[0].category2_no || '999';
-        };
-
-        // Sort category2 keys
         const sortedCat2Keys = Object.keys(subCategories).sort((a, b) => {
-            return getCat2No(a).localeCompare(getCat2No(b), undefined, { numeric: true, sensitivity: 'base' });
+            const valA = subCategories[a][0]?.category2_no || '999';
+            const valB = subCategories[b][0]?.category2_no || '999';
+            return valA.localeCompare(valB, undefined, { numeric: true });
         });
 
         for (const category2 of sortedCat2Keys) {
             const reqs = subCategories[category2];
-            if (!reqs || reqs.length === 0) continue; // Skip if empty
-
-            const cat2No = getCat2No(category2);
+            if (!reqs || reqs.length === 0) continue;
+            const cat2No = reqs[0].category2_no || '';
             const displayCat2No = cat2No === '999' ? '' : `${cat2No}. `;
 
-            body += `<div class="subcategory-group"><h2>${escapeHtml(displayCat2No)}${escapeHtml(category2)}</h2>`;
+            body += `<div class="subcategory-group"><h2>${displayCat2No}${escapeHtml(category2)}</h2>`;
             for (const req of reqs) {
-                const reqName = req.name ? `【${escapeHtml(req.name)}】<br/>` : '';
                 body += `
                     <div class="requirement">
-                        <h3>${escapeHtml(req.id)}. ${reqName}${escapeHtml(req.text)}</h3>
+                        <h3>${escapeHtml(req.id)}. ${req.name ? `【${escapeHtml(req.name)}】` : ''}${escapeHtml(req.text)}</h3>
                         <table class="criteria-table">
-                            <colgroup>
-                                <col style="width: 8%;">
-                                <col style="width: 10%;">
-                                <col style="width: 44%;">
-                                <col style="width: 8%;">
-                                <col style="width: 30%;">
-                            </colgroup>
                             <thead>
                                 <tr>
-                                    <th>★3/★4</th>
-                                    <th>評価基準No.</th>
+                                    <th style="width: 60px;">ID</th>
                                     <th>評価基準</th>
-                                    <th>評価</th>
-                                    <th>備考</th>
+                                    <th style="width: 80px;">評価</th>
+                                    <th style="width: 150px;">備考</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                ${req.criteria.map(criterion => `
+                                ${req.criteria.map(c => `
                                     <tr>
-                                        <td style="text-align: center;">
-                                            ★${criterion.star_level}
-                                        </td>
-                                        <td style="text-align: center;">
-                                            ${escapeHtml(criterion.criterion_id)}
-                                        </td>
-                                        <td>${escapeHtml(criterion.criterion_text)}</td>
-                                        <td>
-                                            <span class="status-badge" style="background-color: ${getStatusColor(criterion.status)}; color: ${criterion.status === '未評価' ? '#000' : '#fff'};">
-                                                ${escapeHtml(criterion.status)}
-                                            </span>
-                                        </td>
-                                        <td class="notes">${escapeHtml(criterion.notes).replace(/\n/g, '<br>') }</td>
+                                        <td>${escapeHtml(c.criterion_id)}</td>
+                                        <td>${escapeHtml(c.criterion_text)}</td>
+                                        <td><span class="status-badge" style="background-color: ${getStatusColor(c.status)}; color: ${c.status === '未評価' ? '#000' : '#fff'};">${escapeHtml(c.status)}</span></td>
+                                        <td class="notes">${escapeHtml(c.notes || '').replace(/\n/g, '<br>')}</td>
                                     </tr>
                                 `).join('')}
                             </tbody>
@@ -1362,217 +696,76 @@ function generatePdfHtml(requirements, evaluationSetName, actionItems) {
                     </div>
                 `;
             }
-            body += `</div>`; // end subcategory-group
+            body += `</div>`;
         }
-        body += `</div>`; // end category-group
+        body += `</div>`;
     }
 
-    // Add Action Items Section
     if (actionItems && actionItems.length > 0) {
-        body += `<div class="category-group" style="page-break-before: always;"><h1>アクションアイテム一覧</h1>`;
-        body += `
+        body += `<div style="page-break-before: always;"><h1>アクションアイテム一覧</h1>
             <table class="criteria-table">
-                <colgroup>
-                    <col style="width: 15%;">
-                    <col style="width: 45%;">
-                    <col style="width: 15%;">
-                    <col style="width: 15%;">
-                    <col style="width: 10%;">
-                </colgroup>
-                <thead>
-                    <tr>
-                        <th>関連評価基準ID</th>
-                        <th>タスク内容</th>
-                        <th>担当者</th>
-                        <th>期日</th>
-                        <th>ステータス</th>
-                    </tr>
-                </thead>
+                <thead><tr><th>基準ID</th><th>タスク</th><th>担当</th><th>期日</th><th>状況</th></tr></thead>
                 <tbody>
                     ${actionItems.map(item => `
-                        <tr>
-                            <td>${escapeHtml(item.criterion_id)}</td>
-                            <td>${escapeHtml(item.taskDescription).replace(/\n/g, '<br>')}</td>
-                            <td>${escapeHtml(item.assignee)}</td>
-                            <td>${item.dueDate ? new Date(item.dueDate).toLocaleDateString('ja-JP') : ''}</td>
-                            <td>${escapeHtml(item.status)}</td>
-                        </tr>
+                        <tr><td>${escapeHtml(item.criterion_id)}</td><td>${escapeHtml(item.taskDescription)}</td><td>${escapeHtml(item.assignee || '')}</td><td>${item.dueDate ? new Date(item.dueDate).toLocaleDateString() : ''}</td><td>${escapeHtml(item.status)}</td></tr>
                     `).join('')}
                 </tbody>
-            </table>
-        </div>`;
+            </table></div>`;
     }
 
-    return `
-        <!DOCTYPE html>
-        <html lang="ja">
-        <head>
-            <meta charset="UTF-8">
-            <title>セキュリティ評価レポート</title>
-            <style>
-                body {
-                    font-family: 'Noto Sans CJK JP', 'Helvetica', 'Arial', sans-serif;
-                    -webkit-print-color-adjust: exact;
-                    color-adjust: exact;
-                    font-size: 12px;
-                }
-                h1 {
-                    font-size: 18px;
-                    text-align: left;
-                    border-bottom: 2px solid #333;
-                    padding-bottom: 5px;
-                    margin-top: 20px;
-                    margin-bottom: 10px;
-                    page-break-after: avoid;
-                }
-                h2 {
-                    font-size: 15px;
-                    background-color: #f0f0f0;
-                    padding: 5px 10px;
-                    border-radius: 4px;
-                    margin-top: 15px;
-                    margin-bottom: 8px;
-                    page-break-after: avoid;
-                }
-                h3 {
-                    font-size: 13px;
-                    margin-top: 10px;
-                    margin-bottom: 5px;
-                    border-left: 4px solid #007bff;
-                    padding-left: 8px;
-                    page-break-after: avoid;
-                }
-                .report-date { text-align: right; color: #555; margin-bottom: 20px; font-size: 10px; }
-                .report-title-section { text-align: center; margin-bottom: 30px; }
-                .report-title-section h1 { 
-                    border: none; 
-                    font-size: 24px; 
-                    text-align: center; 
-                    margin-bottom: 10px; 
-                }
-                .evaluation-set-name {
-                    font-size: 16px;
-                    font-weight: bold;
-                    color: #007bff;
-                    margin-bottom: 10px;
-                }
-
-                .category-group { margin-bottom: 20px; }
-                .subcategory-group { margin-bottom: 15px; }
-                .requirement { page-break-inside: avoid; margin-bottom: 10px; }
-
-                .criteria-table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    font-size: 10px;
-                    table-layout: fixed; /*固定幅レイアウト */
-                }
-                .criteria-table th, .criteria-table td {
-                    border: 1px solid #ddd;
-                    padding: 5px;
-                    text-align: left;
-                    vertical-align: top;
-                    word-wrap: break-word; /* 長い単語の折り返し */
-                }
-                .criteria-table th { background-color: #f9f9f9; }
-                .status-badge {
-                    display: inline-block;
-                    padding: 2px 5px;
-                    border-radius: 3px;
-                    font-size: 9px;
-                    white-space: nowrap;
-                }
-                .notes {
-                    white-space: pre-wrap;
-                    word-wrap: break-word;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="report-title-section">
-                <h1>セキュリティ評価レポート</h1>
-                <div class="evaluation-set-name">評価セット: ${escapeHtml(evaluationSetName)}</div>
-                <p class="report-date">作成日: ${new Date().toLocaleDateString('ja-JP')}</p>
-            </div>
-            ${body}
-        </body>
-        </html>
-    `;
+    return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><style>
+        body { font-family: 'Helvetica', 'Arial', sans-serif; font-size: 11px; line-height: 1.4; color: #333; }
+        h1 { border-bottom: 2px solid #333; margin-top: 20px; font-size: 16px; page-break-after: avoid; }
+        h2 { background: #f0f0f0; padding: 6px 10px; font-size: 14px; border-radius: 4px; margin-top: 15px; page-break-after: avoid; }
+        h3 { border-left: 5px solid #007bff; padding-left: 10px; margin-top: 15px; font-size: 12px; page-break-after: avoid; }
+        .criteria-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; table-layout: fixed; }
+        .criteria-table th, .criteria-table td { border: 1px solid #ddd; padding: 8px; text-align: left; vertical-align: top; word-wrap: break-word; }
+        .criteria-table th { background-color: #f8f9fa; font-weight: bold; }
+        .status-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 9px; white-space: nowrap; }
+        .requirement { page-break-inside: avoid; }
+        @page { size: A4; margin: 20mm 15mm; }
+    </style></head><body><h1 style="text-align: center; border: none; font-size: 22px;">セキュリティ評価レポート</h1><div style="text-align: center; margin-bottom: 20px; font-size: 16px;">評価セット: ${escapeHtml(evaluationSetName)}</div>${body}</body></html>`;
 }
+
 app.post('/api/report/pdf', async (req, res) => {
     const { requirements, evaluationSetName, actionItems } = req.body;
-    if (!requirements) {
-        return res.status(400).send({ error: 'Invalid data format: requirements data is missing.' });
-    }
-
+    if (!requirements) return res.status(400).send({ error: 'Invalid data' });
+    
     let browser;
     const tempFileName = `report-${Date.now()}.pdf`;
     const tempFilePath = path.join(__dirname, tempFileName);
 
     try {
         const htmlContent = generatePdfHtml(requirements, evaluationSetName || '', actionItems);
-        
-        browser = await puppeteer.launch({
-            headless: true,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage', // Docker環境でのメモリクラッシュ防止
-                '--disable-gpu',           // GPU無効化（サーバー負荷軽減）
-                '--no-first-run',
-            ],
-            protocolTimeout: 300000 // タイムアウトを300秒(5分)に延長
+        browser = await puppeteer.launch({ 
+            headless: true, 
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] 
         });
         const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'networkidle0', timeout: 300000 });
         
-        await page.setContent(htmlContent, {
-            waitUntil: 'networkidle0',
-            timeout: 300000 // コンテンツ読み込みタイムアウトを300秒に延長
-        });
-    
-        await page.pdf({
+        await page.pdf({ 
             path: tempFilePath,
-            format: 'Letter',
-            printBackground: false,
-            margin: { top: '20mm', right: '15mm', bottom: '20mm', left: '15mm' },
-            timeout: 300000 // PDF生成タイムアウトを300秒に延長
+            format: 'A4', 
+            margin: { top: '15mm', right: '15mm', bottom: '15mm', left: '15mm' },
+            printBackground: true 
         });
 
-        res.sendFile(tempFilePath, { headers: { 'Content-Disposition': 'attachment; filename=security-report.pdf' } }, (err) => {
-            if (err) {
-                console.error('Error sending file:', err);
-                if (!res.headersSent) {
-                    res.status(500).send({ error: 'Failed to send PDF file.' });
-                }
-            }
-            // Clean up the temporary file
-            fs.unlink(tempFilePath, (unlinkErr) => {
-                if (unlinkErr) {
-                    console.error('Error deleting temporary PDF file:', unlinkErr);
-                }
-            });
+        res.sendFile(tempFilePath, { headers: { 'Content-Disposition': 'attachment; filename=report.pdf' } }, (err) => {
+            if (err) console.error('Send error:', err);
+            if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
         });
 
     } catch (error) {
-        console.error('Error generating PDF report:', error);
-        if (!res.headersSent) {
-            res.status(500).send({ error: 'Failed to generate PDF report' });
-        }
-        // Clean up temp file in case of error during generation
-        fs.unlink(tempFilePath, (unlinkErr) => {
-            if (unlinkErr && unlinkErr.code !== 'ENOENT') { // Ignore if file doesn't exist
-                console.error('Error deleting temporary PDF file after failure:', unlinkErr);
-            }
-        });
+        console.error('PDF Error:', error);
+        if (!res.headersSent) res.status(500).send({ error: 'Failed to generate PDF' });
+        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
     } finally {
-        if (browser) {
-            await browser.close();
-        }
+        if (browser) await browser.close();
     }
 });
 
-// --- Server Initialization & Data Seeding ---
 async function setupAndStartServer() {
   try {
     console.log("Step 1: Starting setup...");
@@ -1581,8 +774,8 @@ async function setupAndStartServer() {
       console.log("Step 1.5: DB_RESET is true. Forcing database sync (dropping all tables)...");
       await sequelize.sync({ force: true });
     } else {
-      console.log("Step 1.5: Syncing database (creating tables if not exist, no alteration)...");
-      await sequelize.sync();
+      console.log("Step 1.5: Syncing database (creating tables if not exist)...");
+      await sequelize.sync({ alter: true });
     }
     console.log("Step 2: Database & tables synced!");
 
@@ -1601,42 +794,31 @@ async function setupAndStartServer() {
         }
     }
 
-    if (count === 0) {
-      console.log("Step 4: Seeding new data from CSV (mapping official format)...");
+    if (count === 0 || shouldForceSync) {
+      console.log("Step 4: Seeding data from METI official CSV format (with references)...");
       const rawCsvRecords = await loadCsvData();
-      const seedData = [];
-      for (const row of rawCsvRecords) {
-        // 要求事項No. と 評価基準No. が必須
-        const reqId = row['要求事項No.'];
-        const critId = row['評価基準No.'];
-        const starStr = row['★3/★4'] || '';
-        
-        if (!reqId || !critId) continue;
+      const seedData = rawCsvRecords.map(row => {
+        const reqId = row[4];
+        const critId = row[10];
+        const starStr = row[9] || '';
+        if (!reqId || !critId) return null;
+        let starLevel = starStr.includes('★3') ? 3 : 4;
+        return {
+            category1_no: row[0], category1: row[1], category2_no: row[2], category2: row[3],
+            requirement_id: reqId, requirement_name: row[7], requirement_text: row[8],
+            star_level: starLevel, criterion_id: critId, criterion_text: row[11],
+            level3_no: row[5] === '○' ? critId : null, Level4_no: row[6] === '○' ? critId : null,
+            explanation: masterExplanations[critId] || null,
+            ref_nist: row[12], ref_cyber_essentials: row[13], ref_cmmc: row[14], ref_iso27001: row[15], ref_gov: row[16], ref_jais: row[17]
+        };
+      }).filter(Boolean);
 
-        // 星レベルの数値化
-        let starLevel = 4;
-        if (starStr.includes('★3')) starLevel = 3;
-        else if (starStr.includes('★4')) starLevel = 4;
-
-        seedData.push({
-            category1_no: row['大分類No.'],
-            category1: row['大分類'],
-            category2_no: row['中分類No.'],
-            category2: row['中分類'],
-            requirement_id: reqId,
-            requirement_name: row['要求事項名'],
-            requirement_text: row['要求事項'],
-            star_level: starLevel,
-            criterion_id: critId,
-            criterion_text: row['評価基準'],
-            level3_no: row['★3'] === '○' ? critId : null,
-            Level4_no: row['★4'] === '○' ? critId : null,
-            explanation: masterExplanations[critId] || null // 新規シーディング時に解説も設定
-        });
+      if (count > 0) {
+          console.log("Clearing existing criteria...");
+          await Criterion.destroy({ where: {}, truncate: true });
       }
-
       await Criterion.bulkCreate(seedData);
-      console.log(`Step 5: Seeding completed! ${seedData.length} criteria loaded and mapped.`);
+      console.log(`Step 5: Seeding completed! ${seedData.length} criteria loaded with references.`);
     } else {
         // すでにデータがある場合でも、解説JSONの内容で既存レコードを更新する
         if (Object.keys(masterExplanations).length > 0) {
@@ -1659,16 +841,12 @@ async function setupAndStartServer() {
 `);
         console.log(`Server listening on http://localhost:${port}`);
     });
-
-  } catch (error) {
-    console.error("--- AN ERROR OCCURRED ---");
-    console.error("Failed to setup or start server:", error);
+  } catch (error) { 
+      console.error("--- AN ERROR OCCURRED ---");
+      console.error("Failed to setup or start server:", error); 
   }
 }
 
 setupAndStartServer();
-
 app.use(express.static(path.join(__dirname, '../client/build')));
-app.get('/*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/build/index.html'));
-});
+app.get('/*', (req, res) => res.sendFile(path.join(__dirname, '../client/build/index.html')));

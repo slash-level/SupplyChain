@@ -104,7 +104,7 @@ const ActionItemManager: React.FC<ActionItemManagerProps> = ({
 
   const getCriterionText = (requirementId: string, criterionId: string): string => {
     const criterion = requirements.flatMap(r => r.criteria).find(c => c.requirement_id === requirementId && c.criterion_id === criterionId);
-    return criterion ? `★${criterion.star_level} [${criterion.criterion_id}] ${criterion.criterion_text.substring(0, 50)}...` : `不明な評価基準 [${criterionId}]`;
+    return criterion ? `★${criterion.star_level} [${criterion.criterion_id}] ${criterion.criterion_text}` : `不明な評価基準 [${criterionId}]`;
   }
 
   return (
@@ -119,8 +119,8 @@ const ActionItemManager: React.FC<ActionItemManagerProps> = ({
         <Table striped bordered hover responsive>
           <thead>
             <tr>
-              <th>関連評価基準</th>
-              <th>タスク内容</th>
+              <th style={{ width: '30%' }}>評価基準</th>
+              <th>アクションアイテム内容</th>
               <th>担当者</th>
               <th>期日</th>
               <th>ステータス</th>
@@ -130,11 +130,11 @@ const ActionItemManager: React.FC<ActionItemManagerProps> = ({
           <tbody>
             {actionItems.map(item => (
               <tr key={item.actionItemId}>
-                <td style={{minWidth: '200px'}}>{getCriterionText(item.requirement_id, item.criterion_id)}</td>
-                <td>{item.taskDescription}</td>
+                <td style={{ fontSize: '0.85rem', wordBreak: 'break-all' }}>{getCriterionText(item.requirement_id, item.criterion_id)}</td>
+                <td style={{ wordBreak: 'break-all' }}>{item.taskDescription}</td>
                 <td>{item.assignee}</td>
-                <td>{item.dueDate ? new Date(item.dueDate).toLocaleDateString() : ''}</td>
-                <td>{item.status}</td>
+                <td className="text-nowrap">{item.dueDate ? new Date(item.dueDate).toLocaleDateString() : ''}</td>
+                <td className="text-nowrap">{item.status}</td>
                 <td>
                   <div className="d-flex flex-column gap-1">
                     <Button variant="outline-secondary" size="sm" className="text-nowrap w-100" onClick={() => handleShowModal(item)}>編集</Button>
@@ -154,17 +154,23 @@ const ActionItemManager: React.FC<ActionItemManagerProps> = ({
         <Modal.Body>
           <Form onSubmit={handleSubmit}>
             <Form.Group className="mb-3">
-              <Form.Label>関連する評価基準 <span className="text-danger small">(必須)</span></Form.Label>
-              <Form.Select name="criterion_id" value={formData.criterion_id} onChange={handleChange} required>
+              <Form.Label>評価基準 <span className="text-danger small">(必須)</span></Form.Label>
+              <Form.Select 
+                name="criterion_id" 
+                value={formData.criterion_id} 
+                onChange={handleChange} 
+                required
+                disabled={!!editingItem} // 編集時は変更不可にする
+              >
                 <option value="">選択してください</option>
                 {requirements.map(req => {
                     const availableCriteria = req.criteria.filter(c => c.status === '未達成' || c.status === '一部達成');
                     if (availableCriteria.length === 0) return null;
                     return (
-                        <optgroup key={req.id} label={`${req.id} ${req.text.substring(0, 30)}...`}>
+                        <optgroup key={req.id} label={`${req.id} ${req.text}`}>
                             {availableCriteria.map(c => (
                                 <option key={c.criterion_id} value={c.criterion_id}>
-                                    ★{c.star_level} [{c.criterion_id}] {c.criterion_text.substring(0, 40)}...
+                                    ★{c.star_level} [{c.criterion_id}] {c.criterion_text}
                                 </option>
                             ))}
                         </optgroup>
@@ -173,7 +179,7 @@ const ActionItemManager: React.FC<ActionItemManagerProps> = ({
               </Form.Select>
             </Form.Group>
             <Form.Group className="mb-3">
-              <Form.Label>タスク内容 <span className="text-danger small">(必須)</span></Form.Label>
+              <Form.Label>アクションアイテム内容 <span className="text-danger small">(必須)</span></Form.Label>
               <Form.Control as="textarea" name="taskDescription" value={formData.taskDescription} onChange={handleChange} required placeholder="具体的なアクションを入力してください" />
             </Form.Group>
             <Form.Group className="mb-3">
