@@ -21,6 +21,7 @@ export type Status = '未評価' | '達成' | '未達成' | '該当なし' | '�
 
 // Data model for AI Advice, as returned from the server
 interface AIAdvice {
+  mode: 'judge' | 'advice';
   advice_text: string;
   updatedAt: string;
 }
@@ -43,7 +44,8 @@ export interface Criterion {
   // Frontend-managed state
   status: Status;
   notes: string;
-  advice?: AIAdvice; // AI advice is now part of the criterion
+  ai_judgment?: AIAdvice; // 判定用
+  ai_advice?: AIAdvice; // 改善案用
 }
 
 // New data model for a Requirement, which groups criteria
@@ -117,8 +119,12 @@ const CriterionItem: React.FC <{
     criterion: Criterion,
     requirement: Requirement,
     onUpdate: (updatedCriterion: Criterion) => void,
-    onShowExplanation: (criterion: Criterion) => void
-}> = ({ criterion, requirement, onUpdate, onShowExplanation }) => {
+    onShowExplanation: (criterion: Criterion) => void,
+    onGetAdvice: (criterion: Criterion, requirement: Requirement, mode: 'advice' | 'judge') => void,
+    isLoadingJudge: boolean,
+    isLoadingAdvice: boolean,
+    adviceError: string | null
+}> = ({ criterion, requirement, onUpdate, onShowExplanation, onGetAdvice, isLoadingJudge, isLoadingAdvice, adviceError }) => {
 
     const handleStatusChange = (newStatus: Status) => {
         onUpdate({ ...criterion, status: newStatus });
@@ -149,11 +155,33 @@ const CriterionItem: React.FC <{
                 </div>
                 <StatusBadge status={criterion.status} />
             </div>
-            <div className="mt-2">
+            <div className="mt-2 d-flex justify-content-between align-items-center">
                 <div className="btn-group btn-group-sm" role="group">
                     <button type="button" className={`btn ${criterion.status === '達成' ? 'btn-success' : 'btn-outline-success'}`} onClick={() => handleStatusChange('達成')}>達成</button>
                     <button type="button" className={`btn ${criterion.status === '未達成' ? 'btn-danger' : 'btn-outline-danger'}`} onClick={() => handleStatusChange('未達成')}>未達成</button>
                     <button type="button" className={`btn ${criterion.status === '該当なし' ? 'btn-secondary' : 'btn-outline-secondary'}`} onClick={() => handleStatusChange('該当なし')}>該当なし</button>
+                </div>
+                <div className="d-flex gap-2">
+                    <Button 
+                        variant="outline-info" 
+                        size="sm" 
+                        onClick={() => onGetAdvice(criterion, requirement, 'judge')}
+                        disabled={isLoadingJudge}
+                        title="現在の備考（現状）を基に、達成・未達成をAIに相談します"
+                    >
+                        {isLoadingJudge ? <><Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" /> 判定中...</> : '🤖 AIに判定を依頼'}
+                    </Button>
+                    {(criterion.status === '未達成' || criterion.status === '一部達成') && (
+                        <Button 
+                            variant="outline-warning" 
+                            size="sm" 
+                            onClick={() => onGetAdvice(criterion, requirement, 'advice')}
+                            disabled={isLoadingAdvice}
+                            title="この項目を達成するための具体的な改善策をAIに聞きます"
+                        >
+                            {isLoadingAdvice ? <><Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" /> 生成中...</> : '💡 改善アドバイスを生成'}
+                        </Button>
+                    )}
                 </div>
             </div>
             <div className="mt-3">
@@ -164,9 +192,32 @@ const CriterionItem: React.FC <{
                     rows={2}
                     value={criterion.notes}
                     onChange={handleNotesChange}
-                    placeholder="未達成の状況や改善点などを記入してください"
+                    placeholder="現在の実施状況（現状）を入力してください。AI判定・アドバイスの際にも参照されます。"
                 ></textarea>
             </div>
+            {adviceError && <Alert variant="danger" className="mt-2 py-2 small">{adviceError}</Alert>}
+            
+            {/* AI判定結果の表示 */}
+            {criterion.ai_judgment && (
+                <div className="mt-2 p-3 bg-light rounded border-start border-4 border-info shadow-sm">
+                    <div className="d-flex justify-content-between align-items-center mb-1">
+                        <h6 className="mb-0 text-info small fw-bold">🤖 AI判定結果</h6>
+                        <small className="text-muted" style={{ fontSize: '0.7rem' }}>{new Date(criterion.ai_judgment.updatedAt).toLocaleString()}</small>
+                    </div>
+                    <div className="small markdown-content"><ReactMarkdown>{criterion.ai_judgment.advice_text}</ReactMarkdown></div>
+                </div>
+            )}
+
+            {/* 改善アドバイスの表示 */}
+            {criterion.ai_advice && (
+                <div className="mt-2 p-3 bg-white rounded border-start border-4 border-warning shadow-sm">
+                    <div className="d-flex justify-content-between align-items-center mb-1">
+                        <h6 className="mb-0 text-warning small fw-bold">💡 改善アドバイス</h6>
+                        <small className="text-muted" style={{ fontSize: '0.7rem' }}>{new Date(criterion.ai_advice.updatedAt).toLocaleString()}</small>
+                    </div>
+                    <div className="small markdown-content"><ReactMarkdown>{criterion.ai_advice.advice_text}</ReactMarkdown></div>
+                </div>
+            )}
         </div>
     );
 };
@@ -175,8 +226,11 @@ const RequirementItem: React.FC <{
     requirement: Requirement, 
     onUpdate: (updatedCriterion: Criterion) => void,
     onShowExplanation: (criterion: Criterion) => void,
+    onGetAdvice: (criterion: Criterion, requirement: Requirement, mode: 'advice' | 'judge') => void,
+    loadingAdviceIds: Set<string>,
+    adviceError: { criterionId: string; message: string } | null,
     starFilter: '3' | '4'
-}> = ({ requirement, onUpdate, onShowExplanation, starFilter }) => {
+}> = ({ requirement, onUpdate, onShowExplanation, onGetAdvice, loadingAdviceIds, adviceError, starFilter }) => {
 
     return (
         <Accordion.Item eventKey={requirement.id} id={`req-item-${requirement.id}`}>
@@ -195,6 +249,10 @@ const RequirementItem: React.FC <{
                             requirement={requirement}
                             onUpdate={onUpdate} 
                             onShowExplanation={onShowExplanation}
+                            onGetAdvice={onGetAdvice}
+                            isLoadingJudge={loadingAdviceIds.has(`${criterion.criterion_id}-judge`)}
+                            isLoadingAdvice={loadingAdviceIds.has(`${criterion.criterion_id}-advice`)}
+                            adviceError={adviceError?.criterionId === criterion.criterion_id ? adviceError.message : null}
                         />
                     ))}
                 </div>
@@ -252,10 +310,10 @@ const ProgressSummary: React.FC <{ requirements: Requirement[], id?: string }> =
 const UnachievedItems: React.FC <{
     requirements: Requirement[], 
     starFilter: '3' | '4',
-    onGetAdvice: (criterion: Criterion, requirement: Requirement) => void,
-    loadingAdviceIds: Set<string>, // Changed prop type
-    adviceError: { criterionId: string; message: string } | null
-}> = ({ requirements, starFilter, onGetAdvice, loadingAdviceIds, adviceError }) => {
+    actionItems: ActionItem[],
+    onDraftActionItem: (criterion: Criterion) => void,
+    draftingTaskIds: Set<string>
+}> = ({ requirements, starFilter, actionItems, onDraftActionItem, draftingTaskIds }) => {
     const groupedUnachieved = useMemo(() => {
         const grouped: Map<string, Map<string, Map<string, { req: Requirement; criteria: Criterion[] }>>> = new Map();
 
@@ -286,86 +344,77 @@ const UnachievedItems: React.FC <{
     };
 
     return (
-        <div className="card mt-4">
-            <div className="card-header bg-warning">
-                <h2 className="mb-0">要対応項目 (未達成・一部達成)</h2>
+        <div className="card mt-4 shadow-sm border-warning">
+            <div className="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
+                <h2 className="mb-0 fs-5 fw-bold">⚠️ 要対応項目（未達成・一部達成）の確認</h2>
+                <Badge bg="dark">{Array.from(groupedUnachieved.values()).reduce((acc, cat1) => acc + Array.from(cat1.values()).reduce((acc2, cat2) => acc2 + cat2.size, 0), 0)} 件</Badge>
             </div>
-            <div className="card-body">
+            <div className="card-body p-0">
                 {groupedUnachieved.size === 0 ? (
-                    <p>現在、未達成または一部達成の項目はありません。</p>
+                    <div className="p-3 text-center text-muted">現在、未達成または一部達成の項目はありません。</div>
                 ) : (
-                    Array.from(groupedUnachieved.entries()).map(([cat1, cat1Map]) => {
-                        const firstReqInCat1 = cat1Map.values().next().value?.values().next().value?.req;
-                        return (
-                            <div key={cat1} className="mb-4">
-                                <h3 className="bg-light p-2 rounded">{firstReqInCat1?.category1_no}. {cat1}</h3>
-                                {Array.from(cat1Map.entries()).map(([cat2, cat2Map]) => {
-                                    const firstReqInCat2 = cat2Map.values().next().value?.req;
-                                    return (
-                                        <div key={cat2} className="ps-3 mb-3">
-                                            <h4 className="border-bottom pb-1 mb-2">{firstReqInCat2?.category2_no}. {cat2}</h4>
-                                            {Array.from(cat2Map.entries()).map(([reqId, { req, criteria }]) => (
-                                                <div key={reqId} className="mb-3 ps-3">
-                                                    <div className="d-flex w-100 justify-content-between align-items-center mb-2">
-                                                        <h5 className="mb-0">{req.id}. {req.name ? `【${req.name}】 ` : ''}{req.text}</h5>
-                                                        <button className="btn btn-sm btn-outline-primary" onClick={() => handleScrollToItem(reqId)}>
-                                                            該当箇所へ移動
-                                                        </button>
-                                                    </div>
-                                                    <div className="list-group">
-                                                        {criteria.map(criterion => {
-                                                            const isLoading = loadingAdviceIds.has(criterion.criterion_id); // Changed check
-                                                            const isThisItemError = adviceError?.criterionId === criterion.criterion_id;
-                                                            return (
-                                                                <div key={criterion.criterion_id} className="list-group-item list-group-item-action flex-column align-items-start">
-                                                                    <p className="mb-1 fw-bold" style={{ whiteSpace: 'pre-wrap' }}>
-                                                                        ★{criterion.star_level} {criterion.criterion_id}<br/>
-                                                                        {criterion.criterion_text}
-                                                                    </p>
-                                                                    <div className="d-flex align-items-center mb-2">
-                                                                        <strong>ステータス:</strong><span className="ms-2"><StatusBadge status={criterion.status} /></span>
-                                                                    </div>
-                                                                    {criterion.notes && (
-                                                                        <div className="mt-2">
-                                                                            <strong>備考:</strong>
-                                                                            <p className="bg-light p-2 rounded mb-0">{criterion.notes}</p>
-                                                                        </div>
-                                                                    )}
-                                                                    {isThisItemError && <Alert variant="danger" className="mt-3">{adviceError.message}</Alert>}
-                                                                    <div className="mt-3 border-top pt-3">
-                                                                        {criterion.advice ? (
-                                                                            <div>
-                                                                                <div className="d-flex justify-content-between align-items-center">
-                                                                                    <h6 className="mb-0 text-info">AIによる改善アドバイス</h6>
-                                                                                    <small className="text-muted">最終更新: {new Date(criterion.advice.updatedAt).toLocaleString()}</small>
-                                                                                </div>
-                                                                                <div className="p-3 mt-2 bg-light rounded"><ReactMarkdown>{criterion.advice.advice_text}</ReactMarkdown></div>
-                                                                                <div className="text-end mt-2">
-                                                                                    <Button variant="outline-info" size="sm" onClick={() => onGetAdvice(criterion, req)} disabled={isLoading}>
-                                                                                        {isLoading ? <><Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" /> 更新中...</> : '内容を更新する'}
-                                                                                    </Button>
-                                                                                </div>
-                                                                            </div>
-                                                                        ) : (
-                                                                            <div className="text-end">
-                                                                                <Button variant="info" size="sm" onClick={() => onGetAdvice(criterion, req)} disabled={isLoading}>
-                                                                                    {isLoading ? <><Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" /> 生成中...</> : 'AIによる改善アドバイスを生成'}
-                                                                                </Button>
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
+                    <div className="table-responsive">
+                        <table className="table table-hover mb-0 align-middle">
+                            <thead className="table-light">
+                                <tr>
+                                    <th style={{ width: '120px' }}>評価基準No.</th>
+                                    <th>評価基準 / 現状（備考）</th>
+                                    <th style={{ width: '120px' }}>状態</th>
+                                    <th style={{ width: '180px' }}>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {Array.from(groupedUnachieved.entries()).flatMap(([cat1, cat1Map]) => 
+                                    Array.from(cat1Map.entries()).flatMap(([cat2, cat2Map]) => 
+                                        Array.from(cat2Map.entries()).flatMap(([reqId, { req, criteria }]) => 
+                                            criteria.map(criterion => {
+                                                const isDrafting = draftingTaskIds.has(criterion.criterion_id);
+                                                const hasActionItem = actionItems.some(ai => ai.criterion_id === criterion.criterion_id);
+
+                                                return (
+                                                    <tr key={criterion.criterion_id}>
+                                                        <td className="small fw-bold">{criterion.criterion_id}</td>
+                                                        <td>
+                                                            <div className="small mb-1">{criterion.criterion_text}</div>
+                                                            {criterion.notes ? (
+                                                                <div className="text-muted x-small bg-light p-1 rounded border" style={{ fontSize: '0.75rem' }}>
+                                                                    <strong>現状:</strong> {criterion.notes}
                                                                 </div>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        );
-                    }) 
+                                                            ) : (
+                                                                <div className="text-danger x-small" style={{ fontSize: '0.75rem' }}>※現状（備考）が未入力です</div>
+                                                            )}
+                                                        </td>
+                                                        <td>
+                                                            <StatusBadge status={criterion.status} />
+                                                            {(criterion.ai_judgment || criterion.ai_advice) && (
+                                                                <Badge bg="info" pill className="ms-1" title="AI判定・アドバイス生成済み">💡</Badge>
+                                                            )}
+                                                        </td>
+                                                        <td>
+                                                            <div className="d-grid gap-1">
+                                                                <Button variant="outline-primary" size="sm" onClick={() => handleScrollToItem(reqId)}>
+                                                                    移動して編集
+                                                                </Button>
+                                                                {criterion.ai_advice && (
+                                                                    <Button 
+                                                                        variant="outline-success" 
+                                                                        size="sm" 
+                                                                        onClick={() => onDraftActionItem(criterion)}
+                                                                        disabled={isDrafting}
+                                                                    >
+                                                                        {isDrafting ? <Spinner animation="border" size="sm" /> : hasActionItem ? '🔄 アクションアイテム案を更新' : '📋 アクションアイテム案を作成'}
+                                                                    </Button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )
+                                    )
+                                )}
+                            </tbody>                        </table>
+                    </div>
                 )}
             </div>
         </div>
@@ -394,8 +443,13 @@ function App() {
   const [loadingActionItems, setLoadingActionItems] = useState(false);
 
   const [loadingAdviceIds, setLoadingAdviceIds] = useState<Set<string>>(new Set()); // Changed state
+  const [draftingTaskIds, setDraftingTaskIds] = useState<Set<string>>(new Set());
   const [adviceError, setAdviceError] = useState<{ criterionId: string; message: string } | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  // States for Action Item Draft Confirmation Modal
+  const [showDraftUpdateConfirm, setShowDraftUpdateConfirm] = useState(false);
+  const [pendingDraftCriterion, setPendingDraftCriterion] = useState<Criterion | null>(null);
 
   // Explanation Modal State
   const [showExplanationModal, setShowExplanationModal] = useState(false);
@@ -485,14 +539,22 @@ function App() {
                 fetch(`/api/actionitems/${evaluationSetId}`).then(res => res.ok ? res.json() : [])
             ]);
 
-            const answersMap = new Map<string, { status: Status, notes: string, advice?: AIAdvice }>(answersData.map((a: any) => [`${a.requirement_id}-${a.criterion_id}`, { status: a.status, notes: a.notes, advice: a.advice }]));
+            const answersMap = new Map<string, { status: Status, notes: string, ai_judgment?: AIAdvice, ai_advice?: AIAdvice }>(
+                answersData.map((a: any) => [`${a.requirement_id}-${a.criterion_id}`, { 
+                    status: a.status, 
+                    notes: a.notes, 
+                    ai_judgment: a.ai_judgment, 
+                    ai_advice: a.ai_advice 
+                }])
+            );
             
             const criteriaWithAnswers: Criterion[] = criteriaData.map((c: any) => ({
-            ...c,
-            status: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.status || '未評価',
-            notes: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.notes || '',
-            advice: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.advice,
-            explanation: c.explanation // ここを追加
+                ...c,
+                status: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.status || '未評価',
+                notes: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.notes || '',
+                ai_judgment: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.ai_judgment,
+                ai_advice: answersMap.get(`${c.requirement_id}-${c.criterion_id}`)?.ai_advice,
+                explanation: c.explanation
             }));
 
             const groupedByReqId = new Map<string, Criterion[]>();
@@ -565,15 +627,15 @@ function App() {
     setShowExplanationModal(true);
   };
 
-  const handleGetAdvice = async (criterion: Criterion, req: Requirement) => {
+  const handleGetAdvice = async (criterion: Criterion, req: Requirement, mode: 'advice' | 'judge' = 'advice') => {
     if (!user || !evaluationSetId) return;
 
     if (adviceError?.criterionId === criterion.criterion_id) {
       setAdviceError(null);
     }
     
-    // Add to loading set
-    setLoadingAdviceIds(prev => new Set(prev).add(criterion.criterion_id));
+    // Add to loading set with mode suffix
+    setLoadingAdviceIds(prev => new Set(prev).add(`${criterion.criterion_id}-${mode}`));
 
     try {
       const response = await fetch('/api/ai/advice', {
@@ -586,6 +648,7 @@ function App() {
           requirementText: req.text,
           criterionText: criterion.criterion_text,
           notes: criterion.notes,
+          mode: mode,
         }),
       });
 
@@ -602,7 +665,7 @@ function App() {
         throw new Error(errorMessage);
       }
 
-      let data: any;
+      let data: AIAdvice;
       try {
         data = await response.json();
       } catch (e) {
@@ -613,7 +676,11 @@ function App() {
         if (r.id === req.id) {
           const newCriteria = r.criteria.map(c => {
             if (c.criterion_id === criterion.criterion_id) {
-              return { ...c, advice: data };
+              return { 
+                ...c, 
+                ai_judgment: data.mode === 'judge' ? data : c.ai_judgment,
+                ai_advice: data.mode === 'advice' ? data : c.ai_advice 
+              };
             }
             return c;
           });
@@ -629,7 +696,7 @@ function App() {
       // Remove from loading set
       setLoadingAdviceIds(prev => {
           const next = new Set(prev);
-          next.delete(criterion.criterion_id);
+          next.delete(`${criterion.criterion_id}-${mode}`);
           return next;
       });
     }
@@ -691,6 +758,74 @@ function App() {
       setNotification({ type: 'danger', message: 'アクションアイテムの削除に失敗しました。' });
     } finally {
       setIsDeletingActionItem(false);
+    }
+  };
+
+  const handleDraftActionItem = async (criterion: Criterion) => {
+    if (!criterion.ai_advice || !evaluationSetId) return;
+
+    // 既存のアクションアイテムがあるか確認
+    const existingItem = actionItems.find(ai => ai.criterion_id === criterion.criterion_id);
+    if (existingItem) {
+      // 存在する場合は確認モーダルを表示
+      setPendingDraftCriterion(criterion);
+      setShowDraftUpdateConfirm(true);
+      return;
+    }
+
+    // 存在しない場合はそのまま実行
+    await executeDraftActionItem(criterion);
+  };
+
+  const executeDraftActionItem = async (criterion: Criterion) => {
+    if (!criterion.ai_advice || !evaluationSetId) return;
+
+    setDraftingTaskIds(prev => new Set(prev).add(criterion.criterion_id));
+    try {
+      const response = await fetch('/api/ai/generate-action-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adviceText: criterion.ai_advice.advice_text, criterionId: criterion.criterion_id }),
+      });
+      
+      if (!response.ok) {
+        if (response.status === 503) {
+          throw new Error('AIが混み合っています。少し時間をおいてから再度お試しください。');
+        }
+        throw new Error('アクションアイテム案の作成に失敗しました。');
+      }
+
+      const { taskDescription } = await response.json();
+      const existingItem = actionItems.find(ai => ai.criterion_id === criterion.criterion_id);
+
+      if (existingItem) {
+        // 既存の更新
+        await handleUpdateActionItem({
+          ...existingItem,
+          taskDescription: taskDescription
+        });
+        setNotification({ type: 'success', message: `「${criterion.criterion_id}」のアクションアイテムを更新しました。` });
+      } else {
+        // 新規作成
+        await handleAddActionItem({
+          evaluationSetId,
+          requirement_id: criterion.requirement_id,
+          criterion_id: criterion.criterion_id,
+          taskDescription: taskDescription,
+          status: '未着手'
+        });
+        setNotification({ type: 'success', message: `「${criterion.criterion_id}」のアクションアイテム案を作成しました。` });
+      }
+    } catch (error: any) {
+      setNotification({ type: 'danger', message: error.message || 'アクションアイテム案の作成に失敗しました。' });
+    } finally {
+      setDraftingTaskIds(prev => {
+        const next = new Set(prev);
+        next.delete(criterion.criterion_id);
+        return next;
+      });
+      setShowDraftUpdateConfirm(false);
+      setPendingDraftCriterion(null);
     }
   };
 
@@ -936,6 +1071,9 @@ function App() {
                                             requirement={req} 
                                             onUpdate={handleCriterionUpdate} 
                                             onShowExplanation={handleShowExplanation}
+                                            onGetAdvice={handleGetAdvice}
+                                            loadingAdviceIds={loadingAdviceIds}
+                                            adviceError={adviceError}
                                             starFilter={starFilter} 
                                         />
                                     ))}
@@ -948,9 +1086,9 @@ function App() {
               <UnachievedItems 
                 requirements={filteredRequirements} 
                 starFilter={starFilter} 
-                onGetAdvice={handleGetAdvice} 
-                loadingAdviceIds={loadingAdviceIds} // Pass new state
-                adviceError={adviceError}
+                actionItems={actionItems}
+                onDraftActionItem={handleDraftActionItem}
+                draftingTaskIds={draftingTaskIds}
               />
               <ActionItemManager actionItems={actionItems} requirements={allRequirements} evaluationSetId={evaluationSetId} onAddActionItem={handleAddActionItem} onUpdateActionItem={handleUpdateActionItem} onDeleteActionItem={handleActionItemDeleteClick} />
             </>
@@ -998,6 +1136,22 @@ function App() {
           <Button variant="danger" onClick={handleActionItemDeleteConfirm} disabled={isDeletingActionItem}>{isDeletingActionItem ? <><Spinner as="span" animation="border" size="sm" role="status" aria-hidden="true" /> 削除中...</> : '削除'}</Button>
         </Modal.Footer>
       </Modal>
+
+      <Modal show={showDraftUpdateConfirm} onHide={() => setShowDraftUpdateConfirm(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>アクションアイテムの更新確認</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          評価基準「{pendingDraftCriterion?.criterion_id}」には既にアクションアイテムが登録されています。<br/><br/>
+          最新のAIアドバイスに基づき、<strong>アクションアイテムの内容を上書き</strong>しますか？<br/>
+          <small className="text-muted">※担当者や期日の設定は維持されます。</small>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowDraftUpdateConfirm(false)}>キャンセル</Button>
+          <Button variant="primary" onClick={() => pendingDraftCriterion && executeDraftActionItem(pendingDraftCriterion)}>上書き更新する</Button>
+        </Modal.Footer>
+      </Modal>
+
       <DeleteAccountModal isOpen={showDeleteModal} onClose={() => setShowDeleteModal(false)} onConfirm={handleConfirmDelete} />
       <Modal show={showExplanationModal} onHide={() => setShowExplanationModal(false)} size="lg" centered>
         <Modal.Header closeButton>
